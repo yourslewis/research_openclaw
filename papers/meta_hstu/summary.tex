@@ -2,6 +2,7 @@
 \usepackage[margin=1in]{geometry}
 \usepackage{hyperref}
 \usepackage{enumitem}
+\usepackage{graphicx}
 \begin{document}
 
 \section*{Actions Speak Louder than Words: Trillion-Parameter Sequential Transducers for Generative Recommendations (2024)}
@@ -35,6 +36,12 @@
   \item \textbf{Pointwise aggregated attention.} Replaces softmax normalization with a pointwise aggregated mechanism to better capture engagement intensity and handle non-stationary vocabularies.
   \item \textbf{Model figure.} The key model comparison is shown in \textbf{Figure 3} (DLRMs vs GRs, simplified HSTU block).
 \end{itemize}
+
+\begin{figure}[h]
+  \centering
+  \includegraphics[width=0.95\textwidth]{fig3_model_comparison.png}
+  \caption{Model comparison: DLRMs vs GRs (from HSTU paper, Figure 3).}
+\end{figure}
 
 \subsection*{Experiments}
 \begin{itemize}[leftmargin=1.5em]
