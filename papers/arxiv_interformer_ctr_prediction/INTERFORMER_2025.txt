@@ -1,0 +1,748 @@
+                                          InterFormer: Effective Heterogeneous Interaction Learning for
+                                                         Click-Through Rate Prediction
+                                               Zhichen Zeng∗1 Xiaolong Liu∗3 Mengyue Hang∗2 Xiaoyi Liu∗2 Qinghai Zhou2 Chaofei Yang2
+                                               Yiqun Liu2 Yichen Ruan2 Laming Chen2 Yuxin Chen2 Yujia Hao2 Jiaqi Xu2 Jade Nie2 Xi Liu2
+                                             Buyun Zhang2 Wei Wen2 Siyang Yuan2 Hang Yin2 Xin Zhang2 Kai Wang2 Wen-Yen Chen2 Yiping
+                                                  Han2 Huayu Li2 Chunzhi Yang2 Bo Long2 Philip S. Yu3 Hanghang Tong1 Jiyan Yang2
+                                                   1 University of Illinois Urbana-Champaign, 2 Meta AI, 3 University of Illinois Chicago
+
+                                                                    {zhichenz, htong}@illinois.edu, {xliu262, psyu}@uic.edu, {hangm, xiaoyliu, chocjy}@meta.com
+
+                                         Abstract                                                                                        target the most receptive audiences. In content recommendation, it
+arXiv:2411.09852v4 [cs.IR] 11 Sep 2025
+
+
+
+
+                                         Click-through rate (CTR) prediction, which predicts the probability                             enables platforms to suggest relevant content to users.
+                                         of a user clicking an ad, is a fundamental task in recommender                                     To achieve better CTR prediction, it is crucial to capture the user
+                                         systems. The emergence of heterogeneous information, such as                                    interests in the evolving environment [32, 49, 85]. The abundance
+                                         user profile and behavior sequences, depicts user interests from                                of heterogeneous information presents both opportunities and chal-
+                                         different aspects. A mutually beneficial integration of heteroge-                               lenges. On the one hand, heterogeneous information depicts user
+                                         neous information is the cornerstone towards the success of CTR                                 interests from different aspects, providing diverse context [81]. For
+                                         prediction. However, most of the existing methods suffer from two                               instance, the non-sequence features, e.g., user profile and context
+                                         fundamental limitations, including (1) insufficient inter-mode inter-                           features, offer a static view on general user interests, while behavior
+                                         action due to the unidirectional information flow between modes,                                sequences provide substantial information for modeling dynamic
+                                         and (2) aggressive information aggregation caused by early summa-                               user interests [49]. On the other hand, the heterogeneous nature of
+                                         rization, resulting in excessive information loss. To address these                             the data requires different modeling approaches and careful inte-
+                                         limitations, we propose a novel module named InterFormer to                                     gration across different information modes [81]. For example, while
+                                         learn heterogeneous information interaction in an interleaving style.                           modeling interactions among non-sequential information is critical
+                                         To achieve better interaction learning, InterFormer enables bidi-                               to personalized recommendation [21, 35, 47], capturing sequential
+                                         rectional information flow for mutually beneficial learning across                              dependencies is the major focus for user behavior modeling [5, 39].
+                                         different modes. To avoid aggressive information aggregation, we                                   Most of the existing CTR prediction models fall into two cate-
+                                         retain complete information in each data mode and use a separate                                gories, including non-sequential and sequential models. Non-sequential
+                                         Cross Arch for effective information selection and summarization.                               models focus on learning informative embeddings through fea-
+                                         InterFormer has been deployed across multiple platforms at Meta                                 ture interaction via inner-product [21, 40], MLP [45, 47] and deep
+                                         Ads, achieving 0.15% performance gain and 24% QPS gain compared                                 structured semantic model [8, 13], but ignore the sequential infor-
+                                         to prior state-of-the-art models and yielding sizable online impact.                            mation in user behaviors. Sequential models, in contrast, employ
+                                                                                                                                         additional modules like CNN [41], RNN [39, 85] and Attention mod-
+                                         Keywords                                                                                        ules [32, 77, 84], to capture the sequential dependencies in user
+                                                                                                                                         behaviors. Promising as it might be, existing sequential methods
+                                         Recommendation, CTR Prediction, Heterogeneous Information
+                                                                                                                                         mostly employ a unidirectional information flow, where the non-
+                                                                                                                                         sequential information is used to guide sequence learning, while
+                                         1     Introduction                                                                              the reverse information flow from sequence to non-sequence is
+                                         Click-through rate (CTR) prediction, which predicts the probabil-                               largely ignored, resulting in insufficient inter-mode interaction. For
+                                         ity of a user clicking an item, is the fundamental task for vari-                               example, the non-sequential information captures long-term inter-
+                                         ous applications such as online advertising and recommender sys-                                ests, while the sequential information reveals momentary interests,
+                                         tems [78, 79]. The quality of CTR prediction significantly influences                           such as a sudden focus on a specific category of products, which
+                                         company revenue and user experience, drawing extensive attention                                can enhance the non-sequential context with immediate preference.
+                                         from academia and industry [22, 27–30, 69, 84, 85]. For example, in                             Besides, due to the computational challenges of performing interac-
+                                         ad bidding, CTR prediction helps advertisers optimize the bids and                              tion learning among numerous non-sequence features and lengthy
+                                                                                                                                         sequences, aggressive feature aggregation, e.g., sequence summa-
+                                         Permission to make digital or hard copies of all or part of this work for personal or           tion [85], pooling [53], and concatenation [84], is often performed
+                                         classroom use is granted without fee provided that copies are not made or distributed           in the early stages, inevitably leading to excessive information loss.
+                                         for profit or commercial advantage and that copies bear this notice and the full citation
+                                         on the first page. Copyrights for components of this work owned by others than the
+                                                                                                                                            In light of the above limitations, we propose a novel heteroge-
+                                         author(s) must be honored. Abstracting with credit is permitted. To copy otherwise, or          neous interaction learning module named InterFormer, whose
+                                         republish, to post on servers or to redistribute to lists, requires prior specific permission   ideas are two-fold. To avoid insufficient inter-mode interaction, we
+                                         and/or a fee. Request permissions from permissions@acm.org.
+                                         Conference acronym ’XX, June 03–05, 2018, Woodstock, NY
+                                                                                                                                         enable bidirectional information flows between different modes,
+                                         © 2018 Copyright held by the owner/author(s). Publication rights licensed to ACM.               such that non-sequence and sequence learning are performed in
+                                         ACM ISBN 978-1-4503-XXXX-X/18/06                                                                an interleaving style. Specifically, to learn context-aware sequence
+                                         https://doi.org/XXXXXXX.XXXXXXX
+Conference acronym ’XX, June 03–05, 2018, Woodstock, NY                                                                               Zhichen Zeng et al.
+
+
+embeddings, non-sequence summarization guides sequence learn-           where DHEN [79] ensembles multiple interaction modules and
+ing via Personalized FeedForward Network (PFFN) and Multihead           Wukong [78] stacks FMs to learn a hierarchy of interactions. Promis-
+Attention (MHA) [43]. To learn behavior-aware non-sequence em-          ing as they are, non-sequential models fail to capture the sequential
+beddings, sequence summarization instructs non-sequence learning        dependencies in user behaviors, resulting in suboptimal solutions.
+via an interaction module. To mitigate aggressive information ag-
+gregation, we adopt MHA for effective information selection such        2.2     Sequential Methods
+that the one-to-one mappings between input and output tokens            With the recent emergence of sequential information, e.g., user
+are retained. Note that our framework is compatible with various        interaction history, in recommender systems, extensive efforts have
+interaction learning models like DCNv2 [47], DHEN [79], etc.            been made to capture the evolving user interest. A key challenge
+   The main contributions of this paper are summarized as follows:      behind sequential methods is to combine the sequential information
+                                                                        with non-sequential information in a mutually beneficial manner.
+      • Challenges. We identify two key bottlenecks of heteroge-        Markov models [10, 36, 68] consider sequential data as a stochastic
+        neous interaction learning, namely insufficient inter-mode      process over discrete random variables, but the oversimplified Mar-
+        interaction and aggressive information aggregation.             kovian property limits the model capability in capturing long-term
+      • Model Design. A novel heterogeneous interaction learning        sequential dependencies [33]. To model the long-term dependencies,
+        framework named InterFormer is proposed for effective           RNN and Attention mechanism are employed as the backbone mod-
+        feature interaction and selective information aggregation.      ule for many sequential methods. For example, various attention-
+        To our best knowledge, we are the first to address the mutual   based networks are designed [32, 84], and Transformer [7, 26, 43]
+        benefits in heterogeneous interaction learning.                 is adopted for sequential modeling [5, 39]. Besides, to model multi-
+      • Experiments and Analysis. Extensive experiments suggest         faceted user interests, [9, 53] propose to capture multiple user inter-
+        that InterFormer achieves up to 0.14% AUC improvement           ests from multi-behavior sequences. More recently, TransAct [51]
+        on benchmark datasets and 0.15% Normalized Entropy (NE)         adopt a hybrid ranking model to combine real-time user actions for
+        gain on industrial dataset. In addition, the internal deploy-   immediate preference and batch user representations for long-term
+        ment at Meta suggests that InterFormer exhibits promising       interests. LiRank [3] improves CTR prediction at LinkedIn by en-
+        scaling results, achieving 0.15% performance gain and 24%       sembling multiple interaction modules, accelerated by quantization
+        QPS gain compared to SOTA CTR models, and yielding siz-         and vocabulary compression. CARL [6] achieves fast inference on
+        able online impact.                                             large-scale recommendation in Kuaishou by utilizing cached results,
+   The rest of the paper is organized as follows. Section 2 briefly     monitored by a reinforcement learning-based framework. While
+reviews the recent works on interaction learning. Section 3 sum-        most of the existing sequential methods leverage non-sequential
+marizes the preliminaries, and section 4 introduces our proposed        information for personalized sequence modeling, sequential infor-
+InterFormer. Extensive experiments and analyses are carried out         mation is rarely explored for non-sequence learning. We believe
+in Section 5. We conclude our paper in Section 6.                       such unidirectional design limits the expressiveness of the learned
+                                                                        embeddings, and a bidirectional information flow between different
+                                                                        modes is the key towards better heterogeneous interaction learning.
+2     Related Works
+In the era of big data and AI [2, 23–25, 55–65, 70–76], recommender
+                                                                        3     Preliminaries
+systems have drawn significant attention, exerting profound influ-
+ence on company revenue and user experience [14, 15, 17–19, 44–         Table 1 summarizes the main symbols and notations used through-
+48, 67]. In this section, we review the related works on CTR predic-    out the paper. We use bold uppercase letters for matrices (e.g., X),
+tion, including non-sequential and sequential methods.                  bold lowercase letters for vectors (e.g., x), and lowercase letters for
+                                                                        scalars (e.g., 𝑛). The element at the 𝑖-th row and 𝑗-th column of a
+2.1     Non-Sequential Methods                                          matrix X is denoted as X(𝑖, 𝑗). The transpose of X is denoted by the
+The vast majority of non-sequential models is built upon the idea       superscript T (e.g., XT ). We use superscript 𝑢 to denote users, and
+of Factorization Machine (FM) [21, 35, 40], which models the user-      subscripts 𝑖 and 𝑡 to denote item and timestamp, respectively (e.g.,
+item interaction by linearly combining their low-dimensional em-        𝑦𝑖𝑢𝑡 ). We use x (𝑙𝑗 ) to denote the 𝑗-th non-sequence feature of the 𝑙-th
+beddings [80]. [35] is the very first FM model to capture pair-         layer, and s𝑡(𝑙 ) to denote the sequence feature of the 𝑙-th layer at
+wise interactions. To model high-order interactions, different meth-    timestamp 𝑡. We consider the scenario with 𝑚 dense features, 𝑛
+ods combine FMs with deep neural networks, where FMs learn              sparse features, and 𝑘 sequence features of length 𝑇 . We use 𝑑 to
+low-order interaction via pairwise operation and neural networks        denote the embedding dimension of the CTR model.
+learn high-order interactions via deep architectures. For example,
+MLP [21, 40, 47, 66, 83] captures high-order interactions via dense     3.1     Click-Through Rate (CTR) Prediction
+connections between features, and Attention mechanism [37, 52,          CTR prediction estimates the probability of a user clicking on an
+54] learns more complex embeddings through linear combination.          item given heterogeneous information such as static context and
+These deep learning-based approaches enable end-to-end training         behavior sequences. Formally, given a user set U and an item set
+without hand-craft feature designs, and are capable of handling         I, the interaction sequence of a user 𝑢 ∈ U is defined as 𝑆 𝑢 =
+heterogeneous information like text, image and video [80]. Be-          [𝑖𝑢1 , 𝑖𝑢2 , . . . , 𝑖𝑇𝑢 ], where 𝑖𝑡𝑢 ∈ I is the item interacted at time step 𝑡 by
+sides, recent works address the scaling law in recommendation,          user 𝑢. We aim to estimate the probability of a user clicking on a new
+InterFormer: Effective Heterogeneous Interaction Learning for Click-Through Rate Prediction                        Conference acronym ’XX, June 03–05, 2018, Woodstock, NY
+
+
+                      Table 1: Symbols and notations.                                         where Norm(·) is a normalization function, Interaction𝑖 represents
+      Symbol                                   Definition                                     different interaction modules that are further assembled by Ensemble𝑘𝑖=1 (·)
+                                                                                              such as summation and concatenation, and ShortCut(·) is an MLP
+      U, I                       user set and item set                                        serving as the residual connection for deep layer stacking.
+       x (𝑙𝑗 )           𝑗-th non-sequence feature of layer 𝑙
+       s𝑡(𝑙 )          sequence feature of layer 𝑙 at time step 𝑡                             3.3    Attention Mechanism
+      𝑚, 𝑛, 𝑘        number of dense, sparse and sequence features                            Attention mechanisms [1] have become an integral part of sequence
+       𝑇,𝑑            sequence length and embedding dimension                                 modeling, serving as the core component behind various model
+         ⊙                        Hadamard product                                            designs [7, 43]. We briefly review attention mechanisms, including
+       ⟨·, ·⟩                       inner product                                             Multi-Head Attention and Pooling by Multihead Attention (PMA).
+       [·∥·]             horizontal concatenation of vectors                                  Multi-Head Attention (MHA) [43] allows sequence modeling
+                                                                                              without regard to distance between tokens [43]. Given an input
+                                                                                              sequence S = [s1, . . . , s𝑇 ], where s𝑡 ∈ R𝑑 is the embedding vector
+item 𝑖𝑇𝑢 +1 , denoted as 𝑦𝑖𝑢𝑇 +1 , given the historical interaction sequence                  at timestamp 𝑡, the self-attention operation is defined as:
+𝑆 𝑢 . Formally, we seek to learn a function 𝑓 : U × I × S → [0, 1],                                                                            √︁ 
+where S is the set of all possible sequences, such that:                                                    Attn(Q, K, V) = softmax QKT / 𝑑𝑘 V,                  (2)
+
+                 𝑃 (𝑦𝑖𝑢𝑇 +1 = 1|𝑢, 𝑖𝑇 +1, 𝑆 𝑢 ; 𝜃 ) = 𝑓 (𝑢, 𝑖𝑇 +1, 𝑆 𝑢 ; 𝜃 ).           (1)   where Q, K, V ∈ R𝑛×𝑑𝑘 are query, key and value representations
+                                                                                              computed by linear projections Q = ST W𝑄 , K = ST W𝐾 , V = ST W𝑉 .
+To optimize the model, the cross-entropy loss, which measures the
+                                                                                                 To enable joint attention to information from different embed-
+difference between predicted and groundtruth click probabilities,
+                                                                                              ding subspaces, MHA aggregates ℎ parallel attention as follows:
+is commonly employed as the objective function. Since the formu-
+lation in Eq. (1) incorporates temporal dynamics in user behaviors,                                       MHA(Q, K, V) = [head1 ∥ . . . ∥headℎ ] W𝑂 ,                  (3)
+it potentially leads to better CTR predictions than non-sequential
+                                                                                              where heads are computed by self-attention head𝑖 = Attn(QW𝑖 ,
+                                                                                                                                                                       𝑄
+methods that ignore the sequential nature of user interactions.
+                                                                                              KW𝑖𝐾 , VW𝑉𝑖 ) and aggregated via an output projector W𝑂 ∈ Rℎ𝑑𝑘 ×𝑑 .
+3.2     Feature Interaction                                                                   Pooling by Multi-Head Attention (PMA) [17]. Rather than
+                                                                                              obtaining query, key and values from the same input sequence S,
+Interaction learning, which aims to capture the complex relation-
+                                                                                              PMA utilizes a learnable query QPMA ∈ R𝑘 ×𝑑𝑘 to summarize the
+ships between different features, is the key towards the success
+                                                                                              sequence from 𝑘 different aspects, which can be defined as follows
+of CTR prediction. We briefly introduce three prominent feature
+interaction modules: inner product, DCNv2 [47] and DHEN [79].                                                 PMA(QPMA, S) = MHA(QPMA, K, V).                          (4)
+Inner Product-based Interaction. Given input feature vector
+                                                                                              Intuitively, each column in QPMA is a seed vector summarizing S as
+x ∈ R𝑑 , the inner product-based interaction, exemplified by Factor-
+                                                                                              a 𝑑-dimensional vector, and the output of PMA is the concatenation
+ization Machines (FM) [35], learns a latent vector v 𝑗 ∈ R𝑟 for each
+                                                                                              of 𝑘 summarization depicting sequence from different aspects.
+feature 𝑗, whose inner product ⟨v 𝑗 , v𝑘 ⟩ describes the interaction
+strength between features x( 𝑗) and x(𝑘). Hence, the second-order
+feature interactions can be modeled as:
+                                                                                              4     Methodology
+                        𝑑 ∑︁
+                           𝑑                                  𝑑
+                                                                                              In this section, we present our proposed InterFormer. We first
+                                                                                              introduce the preprocessing module in Section 4.1, followed by
+                       ∑︁                                    ∑︁
+       𝑓𝐹 𝑀 (x) =                  ⟨v 𝑗 , v𝑘 ⟩x( 𝑗)x(𝑘) +           𝑤 𝑗 x( 𝑗) + 𝑤 0 .
+                       𝑗=1 𝑘=𝑗+1                              𝑗=1                             three major modules, including Interaction Arch, Sequence Arch
+                                                                                              and Cross Arch. To learn behavior-aware non-sequence embed-
+Deep & Cross Network (DCNv2) [47]. The DCNv2 model com-                                       dings, the Interaction Arch models feature interactions (Section 4.2).
+bines a cross network for explicit feature interactions with a deep                           To learn context-aware sequence embeddings, the Sequence Arch
+neural network for implicit feature interactions. Given input feature                         is proposed to optimize sequence (Section 4.3). The Cross Arch
+vector x (0) ∈ R𝑑 , the 𝑙-th layer of the cross network models the                            connects Interaction and Sequence Arches, enabling effective in-
+second order interaction as follows:                                                          formation summarization and exchange between different modes
+                                                                                              (Section 4.4). An overview of InterFormer is shown in Figure 1.
+                                                     
+              x (𝑙+1) = x (0) ⊙ w (𝑙 ) x (𝑙 ) + b (𝑙 ) + x (𝑙 ) .
+
+DCNv2 further combines the stacked cross layers for explicit in-                              4.1    Feature Preprocessing
+teractions with a deep layer for implicit interactions, enabling an                           Non-Sequence Feature Preproessing. Two types of non-sequence
+output enriched with comprehensive information.                                               features are considered, including dense features like user age and
+Deep Hierarchical Ensemble Network (DHEN) [79]. DHEN                                          item price, and sparse features like user id and item category. To
+learns a hierarchy of interactions based on a layered structure where                         unify the heterogeneity in non-sequence features, different features
+each layer is an ensemble of multiple heterogeneous interaction                               are transformed into embeddings of the same dimensionality.
+modules. Given the concatenation of 𝑚 input features X (𝑙 ) ∈ R𝑑 ×𝑚 ,                                                               (0)
+                                                                                                 Specifically, raw dense features 𝑥 dense  are first concatenated
+the output of the 𝑙-th DHEN layer is computed as:                                                                                h       𝑖                iT
+                                                                                                                         (0)       (0)             (0)
+                                                                                            to form a dense vector xdense = 𝑥 dense1 , . . . , 𝑥 dense𝑚
+                                                                                                                                                             , which is
+X (𝑙+1) = Norm Ensemble𝑘𝑖=1 Interaction𝑖 (X (𝑙 ) ) + ShortCut(X (𝑙 ) ) ,                      further transformed into a 𝑑-dimensional dense embedding vector
+Conference acronym ’XX, June 03–05, 2018, Woodstock, NY                                                                                Zhichen Zeng et al.
+
+
+
+
+Figure 1: An overview of the InterFormer model architecture. Each block consists of three parts, including (1) Interaction
+Arch (orange) to learn behavior-aware non-sequence embeddings given sequence queries; (2) Sequence Arch (blue) to learn
+context-aware sequence embeddings given non-sequence queries; (3) Cross Arch (green) to exchange information between
+Interaction and Sequence Arch. Note that the dashed green line for CLS token appending only happens at the first layer.
+                                  (1)             (0)
+via linear transformation, i.e., xdense = Wdense xdense . Similarly, each     R𝑑 ×𝑇 linearly combines multiple sequences into one, matching the
+raw sparse feature is first encoded as an one-hot vector xsparse (0)
+                                                                        ∈     dimensionalities of non-sequence and sequence features.
+                                                                     𝑖
+R𝑛 𝑣𝑖 , where 𝑛 𝑣𝑖 is the vocabulary size of the 𝑖-th sparse feature,
+and further transformed into a 𝑑-dimensional embedding vector by              4.2    Interaction Arch: Towards Behavior-Aware
+  (1)               (0)
+xsparse = Wsparse xsparse .                                                          Interaction Learning
+    By concatenating the dense and sparse embedding vectors, the              Non-sequence features, such as user profile and ad content, provide
+input non-sequence embedding matrix can be obtained as follows                substantial information in understanding user preference over a
+                                                                              specific item. Modeling the interaction among non-sequence fea-
+                         h                                   i
+                            (1)   (1)                (1)
+                X (1) = xdense  ∥xsparse   ∥ . . . ∥xsparse    .       (5)
+                                         1                 𝑛                  tures is the key towards the success of CTR prediction [35, 47].
+Sequence Feature Preprocessing. Similar to the non-sequence                   While non-sequence features reflect static user interests [21, 79],
+feature preprocessing, an embedding layer is employed such that               the behavior sequence provides complementary information depict-
+each interacted item in the sequence is mapped to a 𝑑-dimensional             ing user interests from a dynamic view [84]. For instance, while user
+vector s𝑡 , and the behavior sequences ishrepresented asi the concate-        profile exhibits a general interest in electronics, the recent browsing
+nation of item embeddings, i.e., S (0) = s1(0) ∥ . . . ∥s𝑇(0) ∈ R𝑑 ×𝑇 .       history on smartphones offers more specific and timely information
+                                                                              on current needs. Therefore, it is crucial to learn behavior-aware
+   Real-world scenarios often encounter multiple sequences from
+                                                                              non-sequence interactions to adapt to the evolving environment.
+different user actions (e.g., click and conversion)or various plat-
+                                                                                 To learn behavior-aware non-sequence interaction, we model
+forms. Moreover, due to the uncertainty of user behaviors, these
+                                                                              the interactions among non-sequence features, as well as sequence
+sequences often contain noisy and irrelevant user-item interac-
+                                                                              summarization, by an interaction module. Formally, given the non-
+tions. To address this, a MaskNet [50] is employed to unify multiple                                                                    (𝑙 )
+sequences and filter out the internal noises via self-masking.                sequence input X (𝑙 ) and sequence summarization Ssum          at the 𝑙-th
+   Specifically, given 𝑘 sequences S1, · · · , S𝑘 , they are first concate-   layer, the output of 𝑙-th Interaction Arch is defined as:
+                                                     h   T
+                                                                      i
+                                                                     T T
+nated along the embedding dimension, i.e., S1(0) ∥ · · · ∥S𝑘(0)          ∈                                                h
+                                                                                                                                     (𝑙 )
+                                                                                                                                          i
+                                                                                        X (𝑙+1) = MLP (𝑙 ) Interaction (𝑙 ) X (𝑙 ) ∥Ssum      ,       (7)
+R𝑘𝑑 ×𝑇 , and further processed by the MaskNet operation as follows
+              MaskNet(S) = MLPlce (S ⊙ MLPmask (S)) ,                  (6)
+                                                                              where Interaction (𝑙 ) (·) is the interaction module. Note that we do
+where MLPmask     : R𝑘𝑑 ×𝑇 → R𝑘𝑑 ×𝑇 computes self-masking to select           not adhere to a specific interaction module, but rather, various back-
+relevant information from input sequences, and MLPlce : R𝑘𝑑 ×𝑇 →              bone models, such as inner product, DCNv2 [47] and DHEN [79],
+InterFormer: Effective Heterogeneous Interaction Learning for Click-Through Rate Prediction                  Conference acronym ’XX, June 03–05, 2018, Woodstock, NY
+
+
+can be adopted. Additionally, an MLP is used to transform the out-                      As the output S (𝑙+1) is of the same shape as the input S (𝑙 ) , aggressive
+put X (𝑙+1) to match the shape of the input X (𝑙 ) enabling selective                   aggregation can be avoided and layers can be easily stacked.
+information aggregation and facilitating easy layer stacking.                              Through layer stacking, for one thing, the sequence embeddings
+   By performing interaction learning on the concatenation of X (𝑙 )                    is aware of non-sequence interactions at different orders via PFFN;
+       (𝑙 )
+and Ssum    , Eq. (7) incorporates non-sequence and sequence features.                  for another, MHA at different layers focuses on different parts of the
+The interactions among non-sequence features capture explicit user                      sequence, capturing multi-scale sequential information. Therefore,
+interests by computing the relevance between user profile and tar-                      the model can learn a rich context-aware encoding of the sequential
+get item content, while the interactions between non-sequence and                       data capturing both local and global patterns within the sequence.
+sequence capture implicit user interests by computing the relevance
+between target item and user’s current need within the interaction                       4.4    Cross Arch: Towards Effective Information
+sequence. Additionally, by computing the interactions among se-                                 Selection and Summarization
+quence features, the most representative information is promoted                        Though selective information aggregation is achieved in both the
+with high interaction scores, while inactive items with low scores                      Interaction and Sequence Arch, as the dimensionalities of input
+are filtered out. By stacking multiple layers, the Interaction Arch                     and output features are retained till the final layer, it is infeasible
+captures rich behavior-aware interactions at different orders.                          to directly exchange such information due to (1) ineffectiveness
+                                                                                        given the noisy information and (2) inefficiency given the high-
+4.3     Sequence Arch: Towards Context-Aware                                            dimensionality. To solve this dilemma, we propose a cross Arch to
+        Sequence Modeling                                                               select and summarize information before exchanging information.
+In addition to the explicit static user preference in non-sequence                          To start with, given the large scale of non-sequence embeddings,
+features, the implicit dynamic user interests behind behavior se-                       it is important to selectively summarize them to guide sequence
+quences provide complementary information [39, 84]. However,                            learning. To this end, we highlight the most useful information
+given that behavior sequences are highly random and noisy, solely                       through a personalized gated selection mechanism as follows:
+relying on sequential information is ineffective. It is important to
+                                                                                                        (𝑙 )
+incorporate non-sequential context into sequence modeling. For                                         Xsum  = Gating(MLP(X (𝑙 ) )),
+example, a user may randomly browse items on shopping platforms,                                                                                               (10)
+                                                                                                       where Gating(X) = 𝜎 (X ⊙ MLP(X)) .
+but given the static information that the user is an electronic fan,
+electronic items, e.g., smartphones and laptops, in the browsing                        where MLP: R𝑑 ×𝑛 → R𝑑 ×𝑛sum with 𝑛 sum ≪ 𝑛, and 𝜎 is the ac-
+history provide key information demanding extra attention.                              tivation function, e.g., sigmoid, tanh or even identity functions.
+   To learn context-aware sequence embeddings, a Sequence Arch                          Self-gating [4] provides sparse masking on the embeddings such
+is designed based on two key ideas: Personalized FFN (PFFN) and                         that relevant information is retained while irrelevant noises are
+Multi-Head Attention (MHA). To enable interactions between non-                         filtered out, providing high-quality context for sequence learning.
+sequential and sequential information, PFFN is employed to trans-                           For sequential information, three types of summarization are
+form sequence embeddings given non-sequence summarization                               neatly designed, including CLS tokens, PMA tokens and recent in-
+                                                              (𝑙 )
+as query. Given non-sequence summarization Xsum                    and sequence         teracted tokens. The CLS tokens SCLS learned by MHA are selected
+embedding S at the 𝑙-th layer, the PFFN operation is defined as:
+               (𝑙 )
+                                                                                        as context-aware sequence summarization. However, the quality of
+                           
+                             (𝑙 )
+                                              
+                                                  (𝑙 )
+                                                                                       CLS tokens largely depend on the learned non-sequential context.
+                     PFFN Xsum    , S (𝑙 ) = 𝑓 Xsum      S (𝑙 ) ,            (8)        To compensate such heavy reliance and enable more flexibility, the
+                                                                                        PMA tokens SPMA [17], which are essentially sequence summariza-
+                  
+            (𝑙 )
+where 𝑓 Xsum         is an MLP that aims to learn the linear projection
+                                                                                        tion based on learnable queries, are employed. Besides, the 𝐾 most
+on sequence based on non-sequence summarization.                                        recent interacted tokens (Srecent ) have been proven to be effective in
+   Besides, to model the relationship among events in a sequence,                       capturing the user’s recent interests [3, 51]. The combination of the
+MHA is applied to enable the model to attend to different parts                         above information is further gated by a self-gating layer, serving
+of the sequence, capturing long-range dependencies and contex-                          as the behavior summarization for non-sequence interaction:
+tual information. To incorporate non-sequential context, before
+feeding into the first InterFormer layer, the non-sequence sum-                                          (𝑙 )
+                                                                                                                       h
+                                                                                                                            (𝑙 )   (𝑙 )   (𝑙 )
+                                                                                                                                                 i
+                 (1)                                                                                    Ssum  = Gating SCLS      ∥SPMA  ∥Srecent    .      (11)
+marizationhXsum       is prepended
+                           i            to the sequence as the CLS token,
+               (1)
+i.e., S (1) = Xsum  ∥S (1) , hence the following MHA on the CLS to-                         In general, the benefits of the cross Arch are two-fold. On the one
+ken can aggregate sequential information using non-sequential                            hand, by separating information summarization from Interaction
+information as the query [7, 43]. This is similar to the early fusion                    and Sequence Arch, information can be retained in both arches,
+idea described in Transact [51] but we primarily consider ’append’                       avoiding aggressive information aggregation. On the other hand,
+instead of ’concat’ as the fusion method. Additionally, rotary posi-                     effective information exchange can be achieved as high-dimensional
+tion embeddings [38] are applied on tokens so that the positional                        non-sequence/sequence features are selected and summarized into
+information in sequences can be effectively leveraged. In general,                       low-dimensional embeddings. Therefore, the Cross Arch plays a
+the Sequence Arch can be written as follow:                                              pivotal role in enabling the model to capture complex interactions
+                                                                                     between non-sequence behaviors and sequential patterns, leading
+                                             (𝑙 )
+                S (𝑙+1) = MHA (𝑙 ) PFFN Xsum      , S (𝑙 ) .       (9)                   to more comprehensive representations of the input data.
+Conference acronym ’XX, June 03–05, 2018, Woodstock, NY                                                                     Zhichen Zeng et al.
+
+
+5     Experiment                                                           Comparing InterFormer with other sequential methods, Inter-
+In this section, we carry out extensive experiments to evaluate the     Former achieves state-of-the-art performance. Specifically, Inter-
+proposed InterFormer. We first introduce the experiment setup           Former outperforms the best competitor by up to 0.9% in gAUC,
+in Section 5.1. Afterwards, we evaluate InterFormer on public           0.14% in AUC and 0.54% in LogLoss. These results demonstrate
+benchmark datasets are carried out in Section 5.2. The proposed         InterFormer’s effectiveness on diverse datasets and generalization
+InterFormer is deployed at Meta, and the post-launch results on         across different recommendation tasks.
+internal industrial-scale dataset are provided in Section 5.3.
+                                                                        5.2.2 Analysis of the Model. First (Interleaving Learning Style), we
+5.1     Experiment Setup                                                analyze how the interleaving learning style benefits heterogeneous
+Datasets. We adopt three benchmark datasets, including Amazon-          interaction learning. To validate the universality of InterFormer,
+Electronics [11], TaobaoAd [42], KuaiVideo [20], and a large-scale      we consider three backbone Interaction Arch, including dot product
+internal dataset for evaluation. Dataset statistics are summarized      (DOT), DCNv2, and DHEN, and five different scenarios, including
+in Table 2 with more details in Appendix B.1.                               • sole where only Interaction Arch is adopted, while sequence
+                   Table 2: Dataset Summary.                                  information is naively aggregated in early stage.
+    Dataset       #Samples      #Feat. (Seq/Non-Seq)      Seq Length        • sep where inter-mode interaction is disabled and Sequence
+                                                                              and Interaction Arch are learnt separately.
+    Amazon        3.0M          6 (2/4)                   100               • s2n where only sequence-to-non-sequence information flow
+    TaobaoAd      25.0M         22 (3/19)                 50                  is enabled, while the reverse direction is disabled.
+    KuaiVideo     13.7M         9 (4/5)                   100               • n2s where only non-sequence-to-sequence information flow
+Baseline Methods. We compare the proposed InterFormer with                    is enabled, while the reverse direction is disabled.
+11 state-of-the-art models, including (1) non-sequential methods:           • int where the bidirectional information flows are activated.
+FM [35], xDeepFM [21], AutoInt+ [37], DCNv2 [47], FmFM [40],            As shown in Figure 2, int consistently outperforms other scenarios
+DOT product, DHEN [79], Wukong [78], and (2) sequential methods:        regardless of the backbone Interaction Arch, with an up to 1.46%
+DIN [85], DIEN [84], BST [5], DMIN [53], DMR [32], TransAct [51].       outperformance in AUC, validating the universal benefits brought
+We adopt DHEN as the Interaction Arch in the experiments. De-           by our proposed interleaving learning style. We also observe an as-
+tailed model configurations are provided in Appendix B.2.               cending order in model performance when more information is ex-
+Metrics. We adopt four widely-used metrics to evaluate the models       changed between different data modes, i.e., sole<sep<n2s≈s2n<int.
+from different aspects, including:                                      This validates our claim that the insufficient inter-mode interac-
+     • AUC provides an aggregated measure of model capacity in          tion is a key bottleneck of heterogeneous interaction learning, and
+       correctly classifying positive and negative samples across       bidirectional information flow enables different data modes to be
+       all thresholds. Higher the better.                               learnt in a mutually beneficial manner. Specifically, when equipped
+     • gAUC provides personalized AUC evaluation, where users           with an additional Sequence Arch (sep), the model performance
+       are weighted by their click account. Higher the better.          consistently outperforms sole w/o sequence modeling. This not
+     • LogLoss (cross-entropy loss) measures the distance between       only shows the necessity of employing different arch for different
+       the prediction 𝑦ˆ and the label 𝑦, and is computed as 𝐿(𝑦, 𝑦)
+                                                                  ˆ =   data modes, but also implies the possible performance degradation
+                 ˆ + (1−𝑦) log (1−𝑦)).
+       − (𝑦 log (𝑦)                   ˆ Lower the better.               when heterogeneous data is integrated naively. Furthermore, given
+     • NE (normalized entropy) [12], is the LogLoss normalized          that the bidirectional information flow (int) consistently outper-
+       by the entropy of the average empirical CTR of the train-        forms the unidirectional setting (n2s and s2n), we attribute the
+       ing set. NE provides a data-insensitive evaluation on model      outperformance of InterFormer on other state-of-the-art sequen-
+       performance as the normalization alleviates the effect of        tial methods [5, 53, 84] to the bidirectional information flow.
+       background CTR on model evaluation. Lower the better.               Second (Selective Information Aggregation), we evaluate the ef-
+                                                                        fect of selective information aggregation by comparing with three
+5.2     Evaluation on Benchmark Datasets                                aggressive aggregation variants, where sequence information is
+5.2.1 Results. The experiment results are shown in Table 3. We          first compressed by (1) average pooling, (2) MLP, and (3) MHA,
+first observe that sequential methods consistently outperforms non-     and further combined with non-sequence features by the interac-
+sequential methods on all datasets. For non-sequential methods,         tion module DHEN. The experimental results are shown in Fig-
+sequence information is naively aggregated in early stages and fur-     ure 3. As the results suggest, selective aggregation (InterFormer)
+ther processed together with non-sequence information. While in         consistently achieves the best performance compared with other
+sequential methods, neatly designed sequence processing modules,        aggressive variants. In general, we can regard MLP as a more selec-
+e.g., RNN [39, 84] and attention mechanism [5, 32, 52, 85], are em-     tive version of average pooling as MLP gradually compresses the
+ployed, so that sequential information can be processed in aware of     sequence information, and similarly, MHA process sequence less
+non-sequence context. The universal outperformance of sequential        aggressive than MLP. Therefore, we may conclude that with more
+methods validates that different data modes should be processed         selective aggregation, the CTR prediction quality improves.
+differently. Besides, results show that aggressive sequence sum-           Third (Sequence Modeling), we visualize the learned attention
+marization in the early stages, without considering non-sequence        map in Figure 4 to understand sequence modeling. We observe
+context, will impair model performance.                                 that the attention map exhibits a cluster structure, i.e., surrounding
+InterFormer: Effective Heterogeneous Interaction Learning for Click-Through Rate Prediction                  Conference acronym ’XX, June 03–05, 2018, Woodstock, NY
+
+
+Table 3: Experiments on benchmark datasets. Methods with high gAUC and AUC, and low LogLoss and #Params are preferred.
+
+ Dataset                       AmazonElectronics                                     TaobaoAds                                     KuaiVideo
+ Metric              gAUC      AUC   LogLoss #Params gAUC                          AUC   LogLoss #Params gAUC                    AUC  LogLoss #Params
+ FM                  0.8494     0.8485     0.5060        4.23M         0.5628      0.6231     0.1973    43.08M        0.6567     0.7389    0.4445       52.76M
+ xDeepFM             0.8763     0.8791     0.4394        5.46M         0.5675      0.6378     0.1960    53.79M        0.6621     0.7423    0.4382       43.56M
+ AutoInt+            0.8786     0.8804     0.4441        5.87M         0.5701      0.6467     0.1941    42.05M        0.6619     0.7420    0.4369       43.95M
+ DCNv2               0.8783     0.8807     0.4447        5.23M         0.5704      0.6472     0.1933    43.71M        0.6627     0.7426    0.4378       42.48M
+ FmFM                0.8521     0.8537     0.4796        4.21M         0.5698      0.6330     0.1963    43.06M        0.6552     0.7389    0.4429       51.97M
+ DOT                 0.8697     0.8703     0.4485        4.23M         0.5701      0.6482     0.1941    41.54M        0.6605     0.7435    0.4361       41.29M
+ DHEN                0.8759     0.8790     0.4398        4.99M         0.5708      0.6509     0.1929    43.89M        0.6589     0.7424    0.4365       42.06M
+ Wukong              0.8747     0.8765     0.4455        4.28M         0.5693      0.6478     0.1932    41.72M        0.6587     0.7423    0.4372       41.37M
+ DIN                 0.8817     0.8848     0.4324        5.40M         0.5719      0.6507     0.1931    42.26M        0.6621     0.7437    0.4353       43.03M
+ DIEN                0.8825     0.8856     0.4276        5.37M         0.5721      0.6519     0.1929    42.38M        0.6651     0.7451    0.4343       43.43M
+ BST                 0.8823     0.8847     0.4305        5.30M         0.5698      0.6489     0.1935    42.05M        0.6617     0.7446    0.4352       42.83M
+ DMIN                0.8831     0.8852     0.4298        5.94M         0.5723      0.6498     0.1933    42.17M        0.6623     0.7449    0.4356       41.61M
+ DMR                 0.8827     0.8848     0.4309        6.47M         0.5711      0.6504     0.1932    45.82M        0.6642     0.7449    0.4355       44.15M
+ TransAct            0.8835     0.8851     0.4285        7.56M         0.5715      0.6498     0.1933    44.39M        0.6632     0.7448    0.4352       42.97M
+ InterFormer 0.8843 0.8865 0.4253                        7.18M         0.5728 0.6528 0.1926             44.73M        0.6637     0.7453 0.4340          43.61M
+
+
+
+
+                       (a) DOT                                                (b) DCNv2                                            (c) DHEN
+Figure 2: Study on the interleaving learning style. We consider different non-sequence backbones (DOT, DCNv2, DHEN) and
+different scenarios (sole, sep, n2s, s2n, int). With more information exchanged between different data modes, we observe
+an ascending order in performance: sole<sep<n2s≈s2n<int, validating the necessity of the interleaving learning style (int).
+
+
+
+
+                                                                                         Figure 4: Attention map on TaobaoAds. The first 4 tokens are
+                                                                                         CLS tokens, followed by the behavior sequence of length 50.
+
+Figure 3: Study on information aggregation. We compare the
+performance with early summarization via average pooling,                                second layer focuses on specific tokens, e.g., recent tokens (tokens
+MLP, and MHA, and InterFormer’s selective aggregation.                                   in right columns) and the 24-th token, for item-specific information.
+
+                                                                                        5.2.3 Ablation Study. To better understand how different model
+tokens are likely to interact, which can be regarded as a weighted                      designs contribute to the final performance, we ablate different
+pooling within selected surrounding tokens. Such selective pooling                      exchanged information, including PMA tokens and recent inter-
+process alleviates random noises in the behavior history to extract                     acted tokens, as well as different modules like the gating module,
+better temporal user interests. Besides, MHAs at different layers                       PFFN and MHA. As the results shown in Figure 5, all the exchanged
+focus on different tokens at different scales. For example, the at-                     information and modules contribute to the model performance.
+tention map is quite uniform in the first layer, indicating pooling                     Specifically, PMA tokens provide effective sequence summarization
+in a broad scale for long-term interests. In contrast, the third layer                  given non-sequence context and are of great importance, ablating
+exhibits stronger interactions within smaller clusters, resulting in                    which decreases AUC by up to 0.004. The gating modules help selec-
+fine-grained aggregation for short-term interests. Furthermore, the                     tive summarize information from different data modes contribute
+Conference acronym ’XX, June 03–05, 2018, Woodstock, NY                                                                      Zhichen Zeng et al.
+
+
+
+
+                                                                                (a) Feature scaling               (b) Model scaling
+
+Figure 5: Ablation study on InterFormer, where ’-’ indicates            Figure 6: Scalability results on (a) feature scaling and (b)
+ablating different information or modules.                              model scaling. InterFormer achieves better scaling curve
+                                                                        than Internal, and promising layer-stacking performance.
+up to 0.003 AUC improvement. The sequence modeling modules
+(PFFN and MHA) also improves the performance to some extent.               For communication overhead reduction, the Interaction Arch
+                                                                        DHEN with heavy parameters and relatively light computation
+5.3     Evaluation on Industrial Datasets                               tends to be FSDP [82] communication-bound in distributed training,
+To evaluate InterFormer’s performance at industrial-scale data,         while the Sequence Arch Transformer with much higher compu-
+we carry out experiments on a large-scale internal dataset from         tation (FLOPs) to parameter ratio is normally computation-bound.
+Meta, containing 70B samples in total, hundreds of non-sequence         To alleviate such inefficiency, our parallel design of Interaction and
+features and 10 sequences of length 200 to 1,000.                       Sequence Arch allows the exposed communication from DHEN
+                                                                        modules to overlap with sequence computation effectively, result-
+5.3.1 Results. In general, a 3-layer InterFormer achieves a 0.15%       ing in a 20% QPS improvement compared to the performing two
+NE gain compared to the internal SOTA model with similar FLOPs          modules sequentially.
+and 24% Queries Per Second (QPS) gain. Together with feature scal-         For computation efficiency, we perform a series of optimizations,
+ing, the improvement on NE can be further enlarged with a 10%           including 1) reallocating FLOPs from small, low-return modules
+of Model FLOPs Utilization (MFU) on 512 GPUs attained. Inter-           to larger, high ROI modules and 2) combining smaller kernels to
+Former shows great generalizability on a wide range of models           better utilize GPU resources. These optimizations improve MFU for
+showing promising ROI.                                                  interaction modules from 11% to 16%, and DHEN from 38% to 45%,
+   Besides (Sequence Feature Scaling), we evaluate how the perfor-      with a 19% MFU improvement for the overall InterFormer layer.
+mance of InterFormer changes when the sequence feature scale
+increases in internal dataset. In addition to six sequences of length   5.3.3 Online Impact. Interformer has been deployed in key Ads
+100, we include two additional long sequences of length 1000, and       models, including the largest ones through [31], showing superior
+we observe a 0.14% improvement in NE. As shown in Figure 6a,            ROI in scaling compared to other state-of-the-art architectures.
+InterFormer exhibits better scalability compared to the strong in-      Pilot launches in 2024 have yielded a 0.6% improvement in topline
+ternal baseline (Internal) that leverages cross-attention to capture    metrics. We expect great impact to be delivered in subsequent
+sequence and non-sequence information, as NE curve of Inter-            deployment.
+Former continues to decrease when more training samples are
+involved, outperforming Internal by 0.06% in NE. Besides, we
+                                                                        6   Conclusion
+also tried to merge six sequences to generate one long sequence of      In this paper, we propose a novel building block for heterogeneous
+length 600, and we observe promising efficiency improvements in         interaction learning in CTR prediction named InterFormer. The
+QPS (+20%) and MFU (+17%) with a 0.02% NE tradeoff. From the            key idea is an interleaving learning style between different data
+modeling perspective, the results validate that InterFormer is able     modes to achieve effective inter-mode interaction, as well as selec-
+to enlarge the NE gain brought by the sequence feature scaling.         tive information aggregation. In general, An Interaction Arch and
+   In addition (Model Scaling), we evaluate how InterFormer per-        a Sequence Arch are adopted to achieve behavior-aware interac-
+forms when the model scale increases. As Figure 6b shows, scaling       tion learning and context-aware sequence modeling, respectively. A
+InterFormer from 1 to 4 layers achieves consistent NE gains, ex-        Cross Arch is further proposed to for effective information selection
+hibiting good scaling properties. Specifically, compared to a single    and summarization. InterFormer achieves consistent outperfor-
+layer InterFormer, a two-layer InterFormer achieves a signifi-          mance on benchmark datasets, and 0.15% improvement on the NE
+cant 0.13% NE gain, with an additional 0.05% and 0.04% NE gain          of CTR prediction on internal large-scale dataset. Pilot launches in
+achieved by stacking 3 and 4 layers, respectively.                      key Ads models have yielded a 0.6% improvement in topline metrics
+                                                                        and we expect great impact to be delivered.
+5.3.2 Model-System Co-Design. Model architecture design plays a
+crucial role in training efficiency with its implication on GPU FLOPs
+utilization and inter-GPU communication. We highlight two opti-
+mizations based on InterFormer architecture that in total boost
+training efficiency by more than 30%, including communication
+overhead reduction and computation efficiency.
+InterFormer: Effective Heterogeneous Interaction Learning for Click-Through Rate Prediction                            Conference acronym ’XX, June 03–05, 2018, Woodstock, NY
+
+
+References                                                                                        Qianru Li, Shiquan Wang, Evelyn Lyu, Wenjing Lu, Rui Zhang, Wenjun Wang,
+ [1] Dzmitry Bahdanau, Kyunghyun Cho, and Yoshua Bengio. 2014. Neural ma-                         Jason Rudy, Mengyue Hang, Kai Wang, Bo Long, Wenlin Chen, Santanu Kolay,
+     chine translation by jointly learning to align and translate. arXiv preprint                 and Huayu Li. 2025. External Large Foundation Model: How to Efficiently
+     arXiv:1409.0473 (2014).                                                                      Serve Trillions of Parameters for Online Ads Recommendation. In Companion
+ [2] Wenxuan Bao, Zhichen Zeng, Zhining Liu, Hanghang Tong, and Jingrui He. 2024.                 Proceedings of the ACM on Web Conference 2025 (Sydney NSW, Australia) (WWW
+     Matcha: Mitigating Graph Structure Shifts with Test-Time Adaptation. arXiv                   ’25). Association for Computing Machinery, New York, NY, USA, 344–353. https:
+     preprint arXiv:2410.06976 (2024).                                                            //doi.org/10.1145/3701716.3715223
+ [3] Fedor Borisyuk, Mingzhou Zhou, Qingquan Song, Siyu Zhu, Birjodh Tiwana,                 [23] Haokun Lin, Teng Wang, Yixiao Ge, Yuying Ge, Zhichao Lu, Ying Wei, Qingfu
+     Ganesh Parameswaran, Siddharth Dangi, Lars Hertel, Qiang Xiao, Xiaochen Hou,                 Zhang, Zhenan Sun, and Ying Shan. 2025. Toklip: Marry visual tokens to clip
+     et al. 2024. LiRank: Industrial Large Scale Ranking Models at LinkedIn. arXiv                for multimodal comprehension and generation. arXiv preprint arXiv:2505.05422
+     preprint arXiv:2402.06859 (2024).                                                            (2025).
+ [4] Yekun Chai, Shuo Jin, and Xinwen Hou. 2020. Highway transformer: Self-gating            [24] Haokun Lin, Haobo Xu, Yichen Wu, Jingzhi Cui, Yingtao Zhang, Linzhan Mou,
+     enhanced self-attentive networks. arXiv preprint arXiv:2004.08178 (2020).                    Linqi Song, Zhenan Sun, and Ying Wei. 2024. Duquant: Distributing outliers
+ [5] Qiwei Chen, Huan Zhao, Wei Li, Pipei Huang, and Wenwu Ou. 2019. Behavior                     via dual transformation makes stronger quantized llms. Advances in Neural
+     sequence transformer for e-commerce recommendation in alibaba. In Proceedings                Information Processing Systems 37 (2024), 87766–87800.
+     of the 1st international workshop on deep learning practice for high-dimensional        [25] Haokun Lin, Haobo Xu, Yichen Wu, Ziyu Guo, Renrui Zhang, Zhichao Lu, Ying
+     sparse data. 1–4.                                                                            Wei, Qingfu Zhang, and Zhenan Sun. 2025. Quantization Meets dLLMs: A Sys-
+ [6] Xiaoshuang Chen, Gengrui Zhang, Yao Wang, Yulin Wu, Shuo Su, Kaiqiao Zhan,                   tematic Study of Post-training Quantization for Diffusion LLMs. arXiv preprint
+     and Ben Wang. 2024. Cache-Aware Reinforcement Learning in Large-Scale                        arXiv:2508.14896 (2025).
+     Recommender Systems. In Companion Proceedings of the ACM on Web Conference              [26] Xiao Lin, Zhichen Zeng, Tianxin Wei, Zhining Liu, Hanghang Tong, et al. 2025.
+     2024. 284–291.                                                                               Cats: Mitigating correlation shift for multivariate time series classification. arXiv
+ [7] Jacob Devlin, Ming-Wei Chang, Kenton Lee, and Kristina Toutanova. 2018. Bert:                preprint arXiv:2504.04283 (2025).
+     Pre-training of deep bidirectional transformers for language understanding. arXiv       [27] Xiaolong Liu, Zhichen Zeng, Xiaoyi Liu, Siyang Yuan, Weinan Song, Mengyue
+     preprint arXiv:1810.04805 (2018).                                                            Hang, Yiqun Liu, Chaofei Yang, Donghyun Kim, Wen-Yen Chen, et al. 2024. A col-
+ [8] Ali Mamdouh Elkahky, Yang Song, and Xiaodong He. 2015. A multi-view deep                     laborative ensemble framework for ctr prediction. arXiv preprint arXiv:2411.13700
+     learning approach for cross domain user modeling in recommendation systems.                  (2024).
+     In Proceedings of the 24th international conference on world wide web. 278–288.         [28] Zhining Liu, Ruizhong Qiu, Zhichen Zeng, Hyunsik Yoo, David Zhou, Zhe
+ [9] Yongqiang Han, Hao Wang, Kefan Wang, Likang Wu, Zhi Li, Wei Guo, Yong Liu,                   Xu, Yada Zhu, Kommy Weldemariam, Jingrui He, and Hanghang Tong. 2023.
+     Defu Lian, and Enhong Chen. 2024. Efficient Noise-Decoupling for Multi-Behavior              Class-imbalanced graph learning without class rebalancing. arXiv preprint
+     Sequential Recommendation. In Proceedings of the ACM on Web Conference 2024.                 arXiv:2308.14181 (2023).
+     3297–3306.                                                                              [29] Zhining Liu, Ruizhong Qiu, Zhichen Zeng, Yada Zhu, Hendrik Hamann, and
+[10] Ruining He and Julian McAuley. 2016. Fusing similarity models with markov                    Hanghang Tong. 2024. AIM: Attributing, interpreting, mitigating data unfairness.
+     chains for sparse sequential recommendation. In 2016 IEEE 16th international                 In Proceedings of the 30th ACM SIGKDD Conference on Knowledge Discovery and
+     conference on data mining (ICDM). IEEE, 191–200.                                             Data Mining. 2014–2025.
+[11] Ruining He and Julian McAuley. 2016. Ups and downs: Modeling the visual                 [30] Zhining Liu, Ze Yang, Xiao Lin, Ruizhong Qiu, Tianxin Wei, Yada Zhu, Hendrik
+     evolution of fashion trends with one-class collaborative filtering. In proceedings           Hamann, Jingrui He, and Hanghang Tong. 2025. Breaking Silos: Adaptive Model
+     of the 25th international conference on world wide web. 507–517.                             Fusion Unlocks Better Time Series Forecasting. arXiv preprint arXiv:2505.18442
+[12] Xinran He, Junfeng Pan, Ou Jin, Tianbing Xu, Bo Liu, Tao Xu, Yanxin Shi, Antoine             (2025).
+     Atallah, Ralf Herbrich, Stuart Bowers, et al. 2014. Practical lessons from predicting   [31] Liang Luo, Mengyue Hang, Zhengyu Zhang, Andrew Gu, Buyun Zhang, Boyang
+     clicks on ads at facebook. In Proceedings of the eighth international workshop on            Liu, Chen Chen, Fan Yang, Huayu Li, Jade Nie, et al. [n. d.]. M3C: a Multi-Domain
+     data mining for online advertising. 1–9.                                                     Multi-Objective, Mixed-Modality Framework for Cost-Effective, Industry Scale
+[13] Po-Sen Huang, Xiaodong He, Jianfeng Gao, Li Deng, Alex Acero, and Larry                      Recommendation. ([n. d.]).
+     Heck. 2013. Learning deep structured semantic models for web search using               [32] Ze Lyu, Yu Dong, Chengfu Huo, and Weijun Ren. 2020. Deep match to rank
+     clickthrough data. In Proceedings of the 22nd ACM international conference on                model for personalized click-through rate prediction. In Proceedings of the AAAI
+     Information & Knowledge Management. 2333–2338.                                               Conference on Artificial Intelligence, Vol. 34. 156–163.
+[14] Baoyu Jing, Yuchen Yan, Kaize Ding, Chanyoung Park, Yada Zhu, Huan Liu, and             [33] Massimo Quadrana, Paolo Cremonesi, and Dietmar Jannach. 2018. Sequence-
+     Hanghang Tong. 2024. Sterling: Synergistic representation learning on bipartite              aware recommender systems. ACM computing surveys (CSUR) 51, 4 (2018), 1–36.
+     graphs. In Proceedings of the AAAI Conference on Artificial Intelligence, Vol. 38.      [34] Prajit Ramachandran, Barret Zoph, and Quoc V Le. 2017. Searching for activation
+     12976–12984.                                                                                 functions. arXiv preprint arXiv:1710.05941 (2017).
+[15] Baoyu Jing, Yuchen Yan, Yada Zhu, and Hanghang Tong. 2022. Coin: Co-cluster             [35] Steffen Rendle. 2010. Factorization machines. In 2010 IEEE International conference
+     infomax for bipartite graphs. arXiv preprint arXiv:2206.00006 (2022).                        on data mining. IEEE, 995–1000.
+[16] Diederik P Kingma. 2014. Adam: A method for stochastic optimization. arXiv              [36] Guy Shani, David Heckerman, Ronen I Brafman, and Craig Boutilier. 2005. An
+     preprint arXiv:1412.6980 (2014).                                                             MDP-based recommender system. Journal of machine Learning research 6, 9
+[17] Juho Lee, Yoonho Lee, Jungtaek Kim, Adam Kosiorek, Seungjin Choi, and                        (2005).
+     Yee Whye Teh. 2019. Set transformer: A framework for attention-based                    [37] Weiping Song, Chence Shi, Zhiping Xiao, Zhijian Duan, Yewen Xu, Ming Zhang,
+     permutation-invariant neural networks. In International conference on machine                and Jian Tang. 2019. Autoint: Automatic feature interaction learning via self-
+     learning. PMLR, 3744–3753.                                                                   attentive neural networks. In Proceedings of the 28th ACM international conference
+[18] Jinning Li, Ruipeng Han, Chenkai Sun, Dachun Sun, Ruijie Wang, Jingying Zeng,                on information and knowledge management. 1161–1170.
+     Yuchen Yan, Hanghang Tong, and Tarek Abdelzaher. 2024. Large language model-            [38] Jianlin Su, Murtadha Ahmed, Yu Lu, Shengfeng Pan, Wen Bo, and Yunfeng
+     guided disentangled belief representation learning on polarized social graphs. In            Liu. 2024. Roformer: Enhanced transformer with rotary position embedding.
+     2024 33rd International Conference on Computer Communications and Networks                   Neurocomputing 568 (2024), 127063.
+     (ICCCN). IEEE, 1–9.                                                                     [39] Fei Sun, Jun Liu, Jian Wu, Changhua Pei, Xiao Lin, Wenwu Ou, and Peng Jiang.
+[19] Jinning Li, Huajie Shao, Dachun Sun, Ruijie Wang, Yuchen Yan, Jinyang Li,                    2019. BERT4Rec: Sequential recommendation with bidirectional encoder rep-
+     Shengzhong Liu, Hanghang Tong, and Tarek Abdelzaher. 2022. Unsupervised                      resentations from transformer. In Proceedings of the 28th ACM international
+     belief representation learning with information-theoretic variational graph auto-            conference on information and knowledge management. 1441–1450.
+     encoders. In Proceedings of the 45th International ACM SIGIR Conference on Re-          [40] Yang Sun, Junwei Pan, Alex Zhang, and Aaron Flores. 2021. FM2: Field-matrixed
+     search and Development in Information Retrieval. 1728–1738.                                  factorization machines for recommender systems. In Proceedings of the web
+[20] Yongqi Li, Meng Liu, Jianhua Yin, Chaoran Cui, Xin-Shun Xu, and Liqiang Nie.                 conference 2021. 2828–2837.
+     2019. Routing micro-videos via a temporal graph-guided recommendation system.           [41] Jiaxi Tang and Ke Wang. 2018. Personalized top-n sequential recommenda-
+     In Proceedings of the 27th ACM international conference on multimedia. 1464–1472.            tion via convolutional sequence embedding. In Proceedings of the eleventh ACM
+[21] Jianxun Lian, Xiaohuan Zhou, Fuzheng Zhang, Zhongxia Chen, Xing Xie, and                     international conference on web search and data mining. 565–573.
+     Guangzhong Sun. 2018. xdeepfm: Combining explicit and implicit feature in-              [42] Tianchi. [n. d.]. Ad display/click data on taobao.com, 2018. https://tianchi.aliyun.
+     teractions for recommender systems. In Proceedings of the 24th ACM SIGKDD                    com/dataset/56.
+     international conference on knowledge discovery & data mining. 1754–1763.               [43] Ashish Vaswani, Noam Shazeer, Niki Parmar, Jakob Uszkoreit, Llion Jones,
+[22] Mingfu Liang, Xi Liu, Rong Jin, Boyang Liu, Qiuling Suo, Qinghai Zhou, Song                  Aidan N Gomez, Łukasz Kaiser, and Illia Polosukhin. 2017. Attention is all
+     Zhou, Laming Chen, Hua Zheng, Zhiyuan Li, Shali Jiang, Jiyan Yang, Xiaozhen                  you need. Advances in neural information processing systems 30 (2017).
+     Xia, Fan Yang, Yasmine Badr, Ellie Wen, Shuyu Xu, Hansey Chen, Zhengyu                  [44] Dingsu Wang, Yuchen Yan, Ruizhong Qiu, Yada Zhu, Kaiyu Guan, Andrew
+     Zhang, Jade Nie, Chunzhi Yang, Zhichen Zeng, Weilin Zhang, Xingliang Huang,                  Margenot, and Hanghang Tong. 2023. Networked time series imputation via
+Conference acronym ’XX, June 03–05, 2018, Woodstock, NY                                                                                                        Zhichen Zeng et al.
+
+
+     position-aware graph enhanced variational autoencoders. In Proceedings of the        [66] Carl Yang, Lanxiao Bai, Chao Zhang, Quan Yuan, and Jiawei Han. 2017. Bridging
+     29th ACM SIGKDD Conference on Knowledge Discovery and Data Mining. 2256–                  collaborative filtering and semi-supervised learning: a neural approach for poi
+     2268.                                                                                     recommendation. In Proceedings of the 23rd ACM SIGKDD international conference
+[45] Ruoxi Wang, Bin Fu, Gang Fu, and Mingliang Wang. 2017. Deep & cross network               on knowledge discovery and data mining. 1245–1254.
+     for ad click predictions. In Proceedings of the ADKDD’17. 1–7.                       [67] Xiaodong Yang, Huiyuan Chen, Yuchen Yan, Yuxin Tang, Yuying Zhao, Eric Xu,
+[46] Ruijie Wang, Baoyu Li, Yichen Lu, Dachun Sun, Jinning Li, Yuchen Yan,                     Yiwei Cai, and Hanghang Tong. 2024. SimCE: Simplifying Cross-Entropy Loss
+     Shengzhong Liu, Hanghang Tong, and Tarek F Abdelzaher. 2023. Noisy positive-              for Collaborative Filtering. arXiv preprint arXiv:2406.16170 (2024).
+     unlabeled learning with self-training for speculative knowledge graph reasoning.     [68] Yeongwook Yang, Hong-Jun Jang, and Byoungwook Kim. 2020. A hybrid rec-
+     arXiv preprint arXiv:2306.07512 (2023).                                                   ommender system for sequential recommendation: combining similarity models
+[47] Ruoxi Wang, Rakesh Shivanna, Derek Cheng, Sagar Jain, Dong Lin, Lichan Hong,              with markov chains. IEEE Access 8 (2020), 190136–190146.
+     and Ed Chi. 2021. Dcn v2: Improved deep & cross network and practical lessons        [69] Hyunsik Yoo, Zhichen Zeng, Jian Kang, Ruizhong Qiu, David Zhou, Zhining
+     for web-scale learning to rank systems. In Proceedings of the web conference 2021.        Liu, Fei Wang, Charlie Xu, Eunice Chan, and Hanghang Tong. 2024. Ensuring
+     1785–1797.                                                                                user-side fairness in dynamic recommender systems. In Proceedings of the ACM
+[48] Ruijie Wang, Yuchen Yan, Jialu Wang, Yuting Jia, Ye Zhang, Weinan Zhang, and              Web Conference 2024. 3667–3678.
+     Xinbing Wang. 2018. Acekg: A large-scale knowledge graph for academic data           [70] Qi Yu, Zhichen Zeng, Yuchen Yan, Zhining Liu, Baoyu Jing, Ruizhong Qiu, Ariful
+     mining. In Proceedings of the 27th ACM international conference on information            Azad, and Hanghang Tong. 2025. PLANETALIGN: A Comprehensive Python
+     and knowledge management. 1487–1490.                                                      Library for Benchmarking Network Alignment. arXiv preprint arXiv:2505.21366
+[49] Shoujin Wang, Liang Hu, Yan Wang, Longbing Cao, Quan Z Sheng, and Mehmet                  (2025).
+     Orgun. 2019. Sequential recommender systems: challenges, progress and                [71] Qi Yu, Zhichen Zeng, Yuchen Yan, Lei Ying, R Srikant, and Hanghang Tong. 2025.
+     prospects. arXiv preprint arXiv:2001.04830 (2019).                                        Joint optimal transport and embedding for network alignment. In Proceedings of
+[50] Zhiqiang Wang, Qingyun She, and Junlin Zhang. 2021. Masknet: Introducing                  the ACM on Web Conference 2025. 2064–2075.
+     feature-wise multiplication to CTR ranking models by instance-guided mask.           [72] Zhichen Zeng, Boxin Du, Si Zhang, Yinglong Xia, Zhining Liu, and Hanghang
+     arXiv preprint arXiv:2102.07619 (2021).                                                   Tong. 2024. Hierarchical multi-marginal optimal transport for network alignment.
+[51] Xue Xia, Pong Eksombatchai, Nikil Pancha, Dhruvil Deven Badani, Po-Wei Wang,              In Proceedings of the AAAI Conference on Artificial Intelligence, Vol. 38. 16660–
+     Neng Gu, Saurabh Vishwas Joshi, Nazanin Farahpour, Zhiyuan Zhang, and An-                 16668.
+     drew Zhai. 2023. Transact: Transformer-based realtime user action model for          [73] Zhichen Zeng, Ruizhong Qiu, Wenxuan Bao, Tianxin Wei, Xiao Lin, Yuchen Yan,
+     recommendation at pinterest. In Proceedings of the 29th ACM SIGKDD Conference             Tarek F Abdelzaher, Jiawei Han, and Hanghang Tong. 2025. Pave Your Own Path:
+     on Knowledge Discovery and Data Mining. 5249–5259.                                        Graph Gradual Domain Adaptation on Fused Gromov-Wasserstein Geodesics.
+[52] Jun Xiao, Hao Ye, Xiangnan He, Hanwang Zhang, Fei Wu, and Tat-Seng Chua.                  arXiv preprint arXiv:2505.12709 (2025).
+     2017. Attentional factorization machines: learning the weight of feature in-         [74] Zhichen Zeng, Ruizhong Qiu, Zhe Xu, Zhining Liu, Yuchen Yan, Tianxin Wei,
+     teractions via attention networks. In Proceedings of the 26th International Joint         Lei Ying, Jingrui He, and Hanghang Tong. [n. d.]. Graph mixup on approximate
+     Conference on Artificial Intelligence. 3119–3125.                                         gromov–wasserstein geodesics. In Forty-first International Conference on Machine
+[53] Zhibo Xiao, Luwei Yang, Wen Jiang, Yi Wei, Yi Hu, and Hao Wang. 2020. Deep                Learning.
+     multi-interest network for click-through rate prediction. In Proceedings of the      [75] Zhichen Zeng, Si Zhang, Yinglong Xia, and Hanghang Tong. 2023. Parrot:
+     29th ACM International Conference on Information & Knowledge Management.                  Position-aware regularized optimal transport for network alignment. In Pro-
+     2265–2268.                                                                                ceedings of the ACM web conference 2023. 372–382.
+[54] Xin Xin, Bo Chen, Xiangnan He, Dong Wang, Yue Ding, and Joemon M Jose. 2019.         [76] Zhichen Zeng, Ruike Zhu, Yinglong Xia, Hanqing Zeng, and Hanghang Tong.
+     CFM: Convolutional factorization machines for context-aware recommendation..              2023. Generative graph dictionary learning. In International Conference on Ma-
+     In IJCAI, Vol. 19. 3926–3932.                                                             chine Learning. PMLR, 40749–40769.
+[55] Haobo Xu, Yuchen Yan, Dingsu Wang, Zhe Xu, Zhichen Zeng, Tarek F Abdelzaher,         [77] Jiaqi Zhai, Lucy Liao, Xing Liu, Yueming Wang, Rui Li, Xuan Cao, Leon Gao, Zhao-
+     Jiawei Han, and Hanghang Tong. [n. d.]. Slog: An inductive spectral graph                 jie Gong, Fangda Gu, Michael He, et al. 2024. Actions speak louder than words:
+     neural network beyond polynomial filter. In Forty-first International Conference          Trillion-parameter sequential transducers for generative recommendations. arXiv
+     on Machine Learning.                                                                      preprint arXiv:2402.17152 (2024).
+[56] Zhe Xu, Ruizhong Qiu, Yuzhong Chen, Huiyuan Chen, Xiran Fan, Menghai                 [78] Buyun Zhang, Liang Luo, Yuxin Chen, Jade Nie, Xi Liu, Daifeng Guo, Yanli Zhao,
+     Pan, Zhichen Zeng, Mahashweta Das, and Hanghang Tong. 2024. Discrete-state                Shen Li, Yuchen Hao, Yantao Yao, et al. 2024. Wukong: Towards a Scaling Law
+     continuous-time diffusion for graph generation. Advances in Neural Information            for Large-Scale Recommendation. arXiv preprint arXiv:2403.02545 (2024).
+     Processing Systems 37 (2024), 79704–79740.                                           [79] Buyun Zhang, Liang Luo, Xi Liu, Jay Li, Zeliang Chen, Weilin Zhang, Xiaohan
+[57] Yuchen Yan, Yuzhong Chen, Huiyuan Chen, Xiaoting Li, Zhe Xu, Zhichen Zeng,                Wei, Yuchen Hao, Michael Tsang, Wenjun Wang, et al. 2022. DHEN: A deep
+     Lihui Liu, Zhining Liu, and Hanghang Tong. 2024. Thegcn: Temporal heterophilic            and hierarchical ensemble network for large-scale click-through rate prediction.
+     graph convolutional network. arXiv preprint arXiv:2412.16435 (2024).                      arXiv preprint arXiv:2203.11014 (2022).
+[58] Yuchen Yan, Yuzhong Chen, Huiyuan Chen, Minghua Xu, Mahashweta Das,                  [80] Shuai Zhang, Lina Yao, Aixin Sun, and Yi Tay. 2019. Deep learning based recom-
+     Hao Yang, and Hanghang Tong. 2023. From trainable negative depth to edge                  mender system: A survey and new perspectives. ACM computing surveys (CSUR)
+     heterophily in graphs. Advances in Neural Information Processing Systems 36               52, 1 (2019), 1–38.
+     (2023), 70162–70178.                                                                 [81] Yongfeng Zhang, Qingyao Ai, Xu Chen, and W Bruce Croft. 2017. Joint repre-
+[59] Yuchen Yan, Yuzhong Chen, Mahashweta Das, Hao Yang, and Hanghang Tong.                    sentation learning for top-n recommendation with heterogeneous information
+     [n. d.]. ReD-GCN: Revisit the Depth of Graph Convolutional Network. ([n. d.]).            sources. In Proceedings of the 2017 ACM on Conference on Information and Knowl-
+[60] Yuchen Yan, Yongyi Hu, Qinghai Zhou, Lihui Liu, Zhichen Zeng, Yuzhong Chen,               edge Management. 1449–1458.
+     Menghai Pan, Huiyuan Chen, Mahashweta Das, and Hanghang Tong. 2024. Pacer:           [82] Yanli Zhao, Andrew Gu, Rohan Varma, Liang Luo, Chien-Chin Huang, Min Xu,
+     Network embedding from positional to structural. In Proceedings of the ACM Web            Less Wright, Hamid Shojanazeri, Myle Ott, Sam Shleifer, et al. 2023. Pytorch fsdp:
+     Conference 2024. 2485–2496.                                                               experiences on scaling fully sharded data parallel. arXiv preprint arXiv:2304.11277
+[61] Yuchen Yan, Yongyi Hu, Qinghai Zhou, Shurang Wu, Dingsu Wang, and Hang-                   (2023).
+     hang Tong. 2024. Topological anonymous walk embedding: A new structural              [83] Guorui Zhou, Weijie Bian, Kailun Wu, Lejian Ren, Qi Pi, Yujing Zhang, Can Xiao,
+     node embedding approach. In Proceedings of the 33rd ACM International Confer-             Xiang-Rong Sheng, Na Mou, Xinchen Luo, et al. 2020. CAN: revisiting feature co-
+     ence on Information and Knowledge Management. 2796–2806.                                  action for click-through rate prediction. arXiv preprint arXiv:2011.05625 (2020).
+[62] Yuchen Yan, Baoyu Jing, Lihui Liu, Ruijie Wang, Jinning Li, Tarek Abdelzaher, and    [84] Guorui Zhou, Na Mou, Ying Fan, Qi Pi, Weijie Bian, Chang Zhou, Xiaoqiang
+     Hanghang Tong. 2023. Reconciling competing sampling strategies of network                 Zhu, and Kun Gai. 2019. Deep interest evolution network for click-through rate
+     embedding. Advances in Neural Information Processing Systems 36 (2023), 6844–             prediction. In Proceedings of the AAAI conference on artificial intelligence, Vol. 33.
+     6861.                                                                                     5941–5948.
+[63] Yuchen Yan, Lihui Liu, Yikun Ban, Baoyu Jing, and Hanghang Tong. 2021. Dy-           [85] Guorui Zhou, Xiaoqiang Zhu, Chenru Song, Ying Fan, Han Zhu, Xiao Ma, Yanghui
+     namic knowledge graph alignment. In Proceedings of the AAAI conference on                 Yan, Junqi Jin, Han Li, and Kun Gai. 2018. Deep interest network for click-through
+     artificial intelligence, Vol. 35. 4564–4572.                                              rate prediction. In Proceedings of the 24th ACM SIGKDD international conference
+[64] Yuchen Yan, Si Zhang, and Hanghang Tong. 2021. Bright: A bridging algorithm               on knowledge discovery & data mining. 1059–1068.
+     for network alignment. In Proceedings of the web conference 2021. 3907–3917.         [86] Jieming Zhu, Quanyu Dai, Liangcai Su, Rong Ma, Jinyang Liu, Guohao Cai, Xi
+[65] Yuchen Yan, Qinghai Zhou, Jinning Li, Tarek Abdelzaher, and Hanghang Tong.                Xiao, and Rui Zhang. 2022. Bars: Towards open benchmarking for recommender
+     2022. Dissecting cross-layer dependency inference on multi-layered inter-                 systems. In Proceedings of the 45th International ACM SIGIR Conference on Research
+     dependent networks. In Proceedings of the 31st ACM International Conference on            and Development in Information Retrieval. 2912–2923.
+     Information & Knowledge Management. 2341–2351.
+InterFormer: Effective Heterogeneous Interaction Learning for Click-Through Rate Prediction                  Conference acronym ’XX, June 03–05, 2018, Woodstock, NY
+
+
+Appendix                                                                                 B     Experiment Pipeline
+A Model Design                                                                          We adopt the public BARS evaluation framework [86] for bench-
+                                                                                        mark experiments. In general, an Adam [16] optimizer with a learn-
+A.1 Algorithm                                                                           ing rate scheduler is adopted for optimization, where initial learning
+We present the overall algorithm of InterFormer in Algorithm 1.                         rate is tuned in {1e-1, 1e-2, 1e-3}. We use a batch size of 2048, and
+                                                                                        train up to 100 epochs with early stop. We adopt the Swish func-
+Algorithm 1 InterFormer                                                                 tion [34] for activation. We use NVIDIA A100 for benchmark ex-
+                                                                                        periments and NVIDIA H100 for internal experiments. More details
+Input: Non-sequence feature X (0) , sequence feature S (0) , number
+                                                                                        on datasets and model configurations are provided as follows.
+     of layers 𝐿;
+Output: CTR prediction 𝑦;        ˆ
+                                                                                         B.1    Datasets
+  1: Preprocess X (0) , S (0) via Eqs. (5) and (6) to obtain X (1) , S (1) ;
+                                                       (1)
+  2: Compute non-sequence summarization Xsum via Eq. (10);
+                                                                                        We provide a brief description of datasets used in the paper.
+                   (1)
+  3: Prepend Xsum before S (1) as CLS tokens;
+                                                                                            • AmazonElectronics [11] contains product reviews and
+  4: for 𝑙 = 1, 2, . . . , 𝐿 do
+                                                                                              metadata from Amazon with 192,403 users, 63,001 goods,
+  5:    Cross Arch: compute non-sequence summarization Xsum               (𝑙 )                801 categories and 1,689,188 samples. Non-sequence features
+                                               (𝑙 )                                           include user id, item id and item category. Sequence features
+        and sequence summarization Ssum by Eqs. (10) and (11);
+                                                                                              include interacted items and corresponding categories with
+  6:    Interaction Arch: compute non-sequence embeddings
+                                      (𝑙 )                                                    length of 100. We follow the public split with 2.60M samples
+        X (𝑙+1) given X (𝑙 ) and Ssum      by Eq. (7);                                        for training and 0.38M samples for testing.
+  7:    Sequence Arch: compute sequence embeddings S (𝑙+1) given                            • TaobaoAds [42] contains 8 days of ad click-through data on
+                      (𝑙 )
+        S (𝑙 ) and Xsum     by Eq. (9);                                                       Taobao (26 million records) randomly sampled from 1,140,000
+  8: end for                                        h         i                             users. Non-sequence features include item-related features,
+                                                       (𝐿) (𝐿)
+  9: Compute CTR prediction by 𝑦ˆ = MLP Xsum ∥Ssum ;                                          e.g., ad id, category, and price, and user-related features, e.g.,
+ 10: return CTR prediction 𝑦.       ˆ                                                         user id, gender, and age. Sequence features include interacted
+                                                                                              items’ brands and categories, and user behaviors with length
+                                                                                              of 50. We follow the public split with 22.0M samples for
+A.2      More Details on Module Blocks                                                        training and 3.1M samples for testing.
+                                                                                            • KuaiVideo [20] contains 10,000 users and their 3,239,534
+We provide more details on module blocks involved in InterFormer                              interacted micro-videos. Non-sequence features include user
+architecture, including Linear Compressed Embedding (LCE), and                                id, video id, and visual embeddings of videos. Sequence fea-
+personalized FeedForward Network (PFFN).                                                      tures include different behaviors, e.g., click, like, and not
+A.2.1 Linear Compressed Embedding. Given numerous non-sequence                                click, with length of 100. We follow the public split with
+features, it is essential to compress embeddings to a manageable                              10.9M samples for training and 2.7M samples for testing.
+size. In general, given 𝑁 𝑑-dimensional features X ∈ R𝑑 ×𝑁 , LCE                            • Internal contains 70B entries in total, with hundreds of
+is a linear transformation on the sample dimension W ∈ R𝑁 ×𝑀 ,                                non-sequence features describing users and items, and 10
+such that the linear transformation XW ∈ R𝑑 ×𝑀 serves as the                                  sequence features of length 200 to 1,000.
+compressed embedding with 𝑀 features. Together with self-gating
+modules, LCE selectively compress and denoise numerous embed-                            B.2    Model Configuration
+dings, benefiting the model in both efficiency and effectiveness.                       We provide the model configurations in the paper. We use the best
+                                                                                        searched model configurations on BARS whenever possible, and use
+A.2.2 Personalized FFN. PFFN learns interactions between non-
+                                                                                        the provided model default hyperparameters for the rest. In general,
+sequence and sequence embeddings, whose key idea is to apply an
+                                                                                        the attention MLP has sizes in {512,256,128,64} with number of
+FFN on the sequence embeddings with weight learned based on
+                                                                                        heads ranged in {1,2,4,8}. An MLP with sizes in {1024,512,256,128} is
+the summarized non-sequence embeddings. Given non-sequence
+                                                                                        adopted as the classifier head. Other model-specific configurations
+summarization Xsum ∈ R𝑑 ×𝑛sum and sequence embedding S ∈ R𝑑 ×𝑇 ,
+                                                                                        are provided as follows
+PFFN first learns the transformation weight WPFFN = Xsum W ∈
+R𝑑 ×𝑑 , which is further applied on the feature dimension of sequence                        • xDeepFM [21]: The compressed interaction network (CIN)
+embeddings, i.e., WPFFN S. In contrast to the vanilla FFN in Trans-                            is an MLP with size of 32.
+former that may not add too much value to subsequent sequence                                • DCNv2 [47]: The parallel structure is an MLP of size 512,
+modeling, PFFN integrate side information from other data modes.                               and the stacked structure is an MLP with size of 500. We set
+In fact, PFFN is essentially computing enhanced dot-products based                             the low-rank of the cross layer as 32.
+interaction between sequence embeddings and summarized non-                                  • DHEN [79]: We adopt DOT product and DCN as the ensem-
+sequence embeddings that brings much more value for the follow-                                bled modules. The number of layers ranged in {1,2,3}.
+ing sequence modeling.                                                                       • InterFormer: The number of cls tokens is set to be 4, the
+                                                                                               number of PMA tokens ranged is set to be 2, and the number
+                                                                                               of recent tokens ranged is set to be 2.
+
+                                                                                         Received 20 February 2007; revised 12 March 2009; accepted 5 June 2009
+
