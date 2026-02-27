@@ -1,0 +1,150 @@
+% User Modeling Review (2023–present)
+\documentclass[11pt]{article}
+\usepackage[margin=1in]{geometry}
+\usepackage[T1]{fontenc}
+\usepackage{lmodern}
+\usepackage{microtype}
+\usepackage[hidelinks]{hyperref}
+\usepackage{enumitem}
+\setlist{nosep}
+
+\title{User Modeling in Recommender Systems (2023--present): Evidence-backed Review}
+\author{Kelly (OpenClaw) \\\textit{Prepared for Lewis}}
+\date{\today}
+
+\begin{document}
+\maketitle
+
+\section*{Scope}
+This review focuses on user modeling approaches in recommender systems from 2023 to the present.
+For the \textbf{Representative models and results} section, all \textbf{quotes} and \textbf{experimental numbers} are taken directly from the cited papers (PDFs downloaded and parsed locally). No unverifiable numbers were added.
+
+\section{Backgrounds and challenges}
+User modeling in modern recommender systems is no longer just ``encode the last $N$ clicks''. Since 2023, several pressures have shaped new approaches:
+\begin{itemize}
+  \item \textbf{Non-stationarity / interest drift:} user intent shifts across minutes\,$\rightarrow$\,months; continual updates risk catastrophic forgetting.
+  \item \textbf{Very long histories:} production systems want hundreds to thousands of actions; naive Transformer attention scales poorly.
+  \item \textbf{Heterogeneous and multi-surface behavior:} the same user expresses intent across feeds, search, live, short video, product cards, etc.
+  \item \textbf{Representation limits:} fixed embeddings may under-capture multi-aspect semantics and uncertainty.
+  \item \textbf{Objective mismatch:} offline ranking improvements don’t always translate to online gains; bridging retrieval\,$\leftrightarrow$\,ranking remains hard.
+  \item \textbf{Industrial constraints:} latency, memory (embedding tables), and training cost often dominate architecture choice.
+\end{itemize}
+
+\section{Category of approaches (taxonomy)}
+A practical categorization by how user state is represented and updated:
+\begin{itemize}
+  \item \textbf{A. Scaled sequential transducers / ``generative recommenders''} (recommendation as sequence transduction; scaling laws + long history).
+  \item \textbf{B. Efficient long-sequence encoders} (selective SSMs, sparsity / stochastic length / compression).
+  \item \textbf{C. LLM-based user modeling for sequential recommendation (SR)}
+    \begin{itemize}
+      \item C1: LLM as SR model via instruction/prompt/PEFT
+      \item C2: distill sequential knowledge from strong CF-SR into LLMs
+      \item C3: LLM as embedding model with CF awareness (transfer + OOD)
+      \item C4: distillation/pruning to small LMs for deployability
+    \end{itemize}
+  \item \textbf{D. Diffusion-based SR} (denoise/generate next-item embedding with history guidance; address uncertainty / collapse).
+  \item \textbf{E. Tokenization / Semantic-ID / multi-token item representations} (items as tokens; list-wise generation and/or cross-domain generalization).
+  \item \textbf{F. Industrial unified multi-scenario end-to-end systems} (single family across surfaces + RL alignment between retrieval and ranking).
+\end{itemize}
+
+\section{Representative models and results (quotes + numbers)}
+\subsection{A) Scaled sequential transducers / generative recommenders}
+\paragraph{(1) Zhai et al., 2024 --- HSTU / Generative Recommenders.}
+\textbf{Paper:} \emph{Actions Speak Louder than Words: Trillion-Parameter Sequential Transducers for Generative Recommendations}.\\
+\textbf{arXiv:} \url{https://arxiv.org/abs/2402.17152}.\\
+\textbf{Quote (abstract):} ``We reformulate recommendation problems as sequential transduction tasks within a generative modeling framework (\"Generative Recommenders\"), and propose a new architecture, HSTU, designed for high cardinality, non-stationary streaming recommendation data.''\\
+\textbf{Quote (abstract):} ``HSTU outperforms baselines over synthetic and public datasets by up to 65.8\% in NDCG, and is 5.3x to 15.2x faster than FlashAttention2-based Transformers on 8192 length sequences.''\\
+\textbf{Numbers (Table 4):}
+\begin{itemize}
+  \item ML-1M: SASRec(2023) HR@10 0.2853 $\rightarrow$ HSTU 0.3097 $\rightarrow$ HSTU-large 0.3294; NDCG@10 0.1603 $\rightarrow$ 0.1720 $\rightarrow$ 0.1893.
+  \item ML-20M: SASRec(2023) HR@10 0.2906 $\rightarrow$ HSTU 0.3252 $\rightarrow$ HSTU-large 0.3567; NDCG@10 0.1621 $\rightarrow$ 0.1878 $\rightarrow$ 0.2106.
+\end{itemize}
+
+\subsection{B) Efficient long-sequence encoders (SSMs)}
+\paragraph{(2) Liu et al., 2024 --- Mamba4Rec.}
+\textbf{Paper:} \emph{Mamba4Rec: Towards Efficient Sequential Recommendation with Selective State Space Models}.\\
+\textbf{arXiv:} \url{https://arxiv.org/abs/2403.03900}.\\
+\textbf{Quote (abstract):} ``Although Transformer-based models have proven to be effective for sequential recommendation, they suffer from the inference inefficiency problem stemming from the quadratic computational complexity of attention operators, especially for long behavior sequences.''\\
+\textbf{Quote (abstract):} ``Inspired by the recent success of state space models (SSMs), we propose Mamba4Rec, which is the first work to explore the potential of selective SSMs for efficient sequential recommendation.''\\
+\textbf{Numbers (Table 1):}
+\begin{itemize}
+  \item MovieLens-1M: SASRec HR@10 0.2977 / NDCG@10 0.1687 / MRR@10 0.1294 vs Mamba4Rec HR@10 0.3121 / NDCG@10 0.1822 / MRR@10 0.1425.
+  \item Amazon-Video-Games: SASRec NDCG@10 0.0571 / MRR@10 0.0390 vs Mamba4Rec NDCG@10 0.0603 / MRR@10 0.0438.
+\end{itemize}
+
+\subsection{C) LLM-based SR user modeling}
+\paragraph{(3) Kim et al., 2025 --- Lost in Sequence (LLM-SRec).}
+\textbf{Paper:} \emph{Lost in Sequence: Do Large Language Models Understand Sequential Recommendation?}.\\
+\textbf{arXiv:} \url{https://arxiv.org/abs/2502.13909}.\\
+\textbf{Quote (abstract):} ``we found that whether these models understand the sequential information inherent in users’ item interaction sequences has been largely overlooked.''\\
+\textbf{Quote (abstract):} ``existing LLM4Rec models do not fully capture sequential information both during training and inference.''\\
+\textbf{Quote (main text):} ``LLM-SRec consistently outperforms existing LLM4Rec models. This result highlights the importance of distilling the sequential knowledge extracted from CF-SRec into LLMs.''\\
+\textbf{Numbers (Table 6, first dataset block shown in parsed table):} SASRec NDCG@10 0.3459 / HR@10 0.5180 vs LLM-SRec NDCG@10 0.3560 / HR@10 0.5569.
+
+\paragraph{(4) Li et al., 2024 --- E4SRec.}
+\textbf{Paper:} \emph{E4SRec: An elegant effective efficient extensible solution of large language models for sequential recommendation}.\\
+\textbf{arXiv:} \url{https://arxiv.org/abs/2312.02443}.\\
+\textbf{Quote (Table 3 caption):} ``all the results of E4SRec are statistically significant with p $<$ 0.01 compared to the best baseline models.''\\
+\textbf{Numbers (Table 3, Beauty):} ICLRec HR@10 0.0653 vs E4SRec 0.0758; ICLRec nDCG@10 0.0338 vs E4SRec 0.0435; Improv column lists HR@10 16.08\% and nDCG@10 28.70\%.
+
+\paragraph{(5) Xu et al., 2024 --- SLMRec.}
+\textbf{Paper:} \emph{SLMRec: Empowering Small Language Models for Sequential Recommendation}.\\
+\textbf{arXiv:} \url{https://arxiv.org/abs/2405.17890}.\\
+\textbf{Quote (abstract):} ``Surprisingly, we discover that most intermediate layers of LLMs are redundant.''\\
+\textbf{Quote (abstract):} ``the proposed SLMRec model attains the best performance using only 13\% of the parameters found in LLM-based recommendation models, while simultaneously achieving up to 6.6x and 8.0x speedups in training and inference time costs, respectively.''\\
+\textbf{Numbers (Table 2 snippet, Cloth; values reported as \%):} SASRec HR@10 20.26 vs SLMRec (8$\leftarrow$32) HR@10 21.33.
+
+\paragraph{(6) He et al., 2025 --- LLM2Rec.}
+\textbf{Paper:} \emph{LLM2Rec: Large Language Models Are Powerful Embedding Models for Sequential Recommendation}.\\
+\textbf{arXiv:} \url{https://arxiv.org/abs/2506.21579}.\\
+\textbf{Quote (main text):} ``LLM2Rec consistently outperforms all baseline models across both recommenders on all datasets.''\\
+\textbf{Quote (main text):} ``These findings highlight the potential of LLMs as generalizable embedding models for recommendation.''\\
+\textbf{Numbers (Table 3, Games in-domain):} best baseline R@10 0.0544 vs LLM2Rec 0.0624; best baseline N@10 0.0298 vs LLM2Rec 0.0344; %Improv row shows 14.76\% (R@10) and 15.46\% (N@10).
+
+\subsection{D) Diffusion-based SR}
+\paragraph{(7) Huang et al., 2024 --- DCRec.}
+\textbf{Paper:} \emph{Dual Conditional Diffusion Models for Sequential Recommendation}.\\
+\textbf{arXiv:} \url{https://arxiv.org/abs/2410.21967}.\\
+\textbf{Quote (intro):} ``existing models represent items with fixed vectors, which limit their ability to capture the latent aspects of items as well as the diverse and uncertain nature of user preferences.''\\
+\textbf{Numbers (Table 1, Beauty):} SdifRec HR@10 0.0819 / NDCG@10 0.0507 vs DCRec HR@10 0.0859 / NDCG@10 0.0523; the table reports a 3.16\% relative improvement on NDCG@10.
+
+\paragraph{(8) Chen et al., 2025 --- ADRec.}
+\textbf{Paper:} \emph{Unlocking the Power of Diffusion Models in Sequential Recommendation: A Simple and Effective Approach}.\\
+\textbf{arXiv:} \url{https://arxiv.org/abs/2505.19544}.\\
+\textbf{Quote (abstract):} ``we focus on the often-overlooked issue of embedding collapse in existing diffusion-based sequential recommendation models and propose ADRec, an innovative framework designed to mitigate this problem.''\\
+\textbf{Numbers (Table 2):}
+\begin{itemize}
+  \item Beauty: SASRec+ HR@20 15.2038 / NDCG@20 7.6509; ADRec HR@20 16.8246 / NDCG@20 8.3214 (Improv: 10.66\% / 8.76\%).
+  \item Sports: DiffuRec HR@20 6.2174 / NDCG@20 3.2067; ADRec HR@20 8.1639 / NDCG@20 3.6389.
+\end{itemize}
+
+\subsection{E) Tokenization and generative decoding for recommendation lists}
+\paragraph{(9) Petrov \& Macdonald, 2023 --- GPTRec.}
+\textbf{Paper:} \emph{Generative Sequential Recommendation with GPTRec}.\\
+\textbf{arXiv:} \url{https://arxiv.org/abs/2306.11114}.\\
+\textbf{Quote (abstract):} ``This paper presents the GPTRec sequential recommendation model, which is based on the GPT-2 architecture.''\\
+\textbf{Quote (abstract):} ``We experiment with GPTRec on the MovieLens-1M dataset and show that using sub-item tokenisation GPTRec can match the quality of SASRec while reducing the embedding table by 40\%.''\\
+\textbf{Numbers (Table 3, MovieLens-1M):} SASRec NDCG@10 0.108; GPTRec-TopK NDCG@10 0.146; GPTRec-NextK NDCG@10 0.105.
+
+\subsection{F) Industrial multi-scenario unified systems}
+\paragraph{(10) Zhang et al., 2026 --- OneMall.}
+\textbf{Paper:} \emph{One Architecture, More Scenarios --- End-to-End Generative Recommender Family at Kuaishou E-Commerce}.\\
+\textbf{arXiv:} \url{https://arxiv.org/abs/2601.21770v2}.\\
+\textbf{Quote (abstract):} ``we present OneMall, an end-to-end generative recommendation framework tailored for e-commerce services at Kuaishou.''\\
+\textbf{Quote (abstract):} ``Extensive experiments demonstrate that OneMall achieves consistent improvements across all e-commerce scenarios: +13.01\% GMV in product-card, +15.32\% Orders in Short-Video, and +2.78\% Orders in Live-Streaming.''
+
+\section{Full list of references}
+\begin{itemize}
+  \item Zhai, J. et al. (2024). \emph{Actions Speak Louder than Words: Trillion-Parameter Sequential Transducers for Generative Recommendations}. arXiv:2402.17152. \url{https://arxiv.org/abs/2402.17152}
+  \item Liu, C. et al. (2024). \emph{Mamba4Rec: Towards Efficient Sequential Recommendation with Selective State Space Models}. arXiv:2403.03900. \url{https://arxiv.org/abs/2403.03900}
+  \item Petrov, A. V.; Macdonald, C. (2023). \emph{Generative Sequential Recommendation with GPTRec}. arXiv:2306.11114. \url{https://arxiv.org/abs/2306.11114}
+  \item Li, X. et al. (2024). \emph{E4SRec: An elegant effective efficient extensible solution of large language models for sequential recommendation}. arXiv:2312.02443. \url{https://arxiv.org/abs/2312.02443}
+  \item Xu, W. et al. (2024). \emph{SLMRec: Empowering Small Language Models for Sequential Recommendation}. arXiv:2405.17890. \url{https://arxiv.org/abs/2405.17890}
+  \item Huang, H. et al. (2024). \emph{Dual Conditional Diffusion Models for Sequential Recommendation}. arXiv:2410.21967. \url{https://arxiv.org/abs/2410.21967}
+  \item Kim, S. et al. (2025). \emph{Lost in Sequence: Do Large Language Models Understand Sequential Recommendation?} arXiv:2502.13909. \url{https://arxiv.org/abs/2502.13909}
+  \item Chen, J. et al. (2025). \emph{Unlocking the Power of Diffusion Models in Sequential Recommendation: A Simple and Effective Approach}. arXiv:2505.19544. \url{https://arxiv.org/abs/2505.19544}
+  \item He, Y. et al. (2025). \emph{LLM2Rec: Large Language Models Are Powerful Embedding Models for Sequential Recommendation}. arXiv:2506.21579. \url{https://arxiv.org/abs/2506.21579}
+  \item Zhang, K. et al. (2026). \emph{One Architecture, More Scenarios --- End-to-End Generative Recommender Family at Kuaishou E-Commerce}. arXiv:2601.21770v2. \url{https://arxiv.org/abs/2601.21770v2}
+\end{itemize}
+
+\end{document}
