@@ -1,0 +1,68 @@
+\documentclass[11pt]{article}
+\usepackage[margin=1in]{geometry}
+\usepackage[T1]{fontenc}
+\usepackage{lmodern}
+\usepackage{microtype}
+\usepackage[hidelinks]{hyperref}
+\usepackage{enumitem}
+\setlist{nosep}
+
+\title{Recommender Model Review V2 (Industry-heavy)}
+\author{Kelly (OpenClaw) \\\textit{Prepared for Lewis}}
+\date{\today}
+
+\begin{document}
+\maketitle
+
+\section*{Scope}
+This V2 review enriches our previous set of industry-oriented recommender model papers (OneRec V1/V2, HSTU(+Ultra), PLUM, OneTrans) and extends the categorization by adding more industry papers that highlight recurring systems/serving constraints.
+
+\section{Updated categorization (V2 taxonomy)}
+\begin{itemize}
+  \item \textbf{A. End-to-end generative recommendation / unified retrieval+ranking} (OneRec V1/V2, OneMall): single generative policy produces semantic IDs; RL alignment.
+  \item \textbf{B. Generative recommenders as sequential transducers (foundation-style scaling)} (HSTU / GRs, Ultra-HSTU): ranking/retrieval as transduction; scaling laws + long-context efficiency.
+  \item \textbf{C. Industrial ranking Transformers unifying sequence modeling + feature interaction} (OneTrans): unify tokenization; mixed parameterization; pyramid pruning + KV caching.
+  \item \textbf{D. Ultra-long history via offline embeddings (feature pipeline as product)} (DV365): encode 10k--70k history offline into embeddings shared across many downstream models.
+  \item \textbf{E. End-to-end ultra-long sequence Transformers with GPU-centric engineering} (LONGER): global tokens, token merge, hybrid attention + mixed precision/recompute/KV cache/sync train-serve.
+  \item \textbf{F. Lifelong sequences inside CTR ranking + serving optimization} (TransAct V2): lifelong sequences with next-action loss and web-scale serving optimizations.
+  \item \textbf{G. Infra-first systems for online training + embedding tables under concept drift} (Monolith): collisionless embedding tables + online training; reliability vs real-time tradeoffs.
+\end{itemize}
+
+\section{What new challenges industry papers emphasize (cross-paper themes)}
+\begin{itemize}
+  \item \textbf{Compute allocation matters more than raw model size:} e.g., OneRec-V2 motivates shifting FLOPs from context encoding to decision-critical generation.
+  \item \textbf{Ultra-long history is valuable, but serving it is the constraint:} DV365 (offline embeddings), TransAct V2 (serving constraints), LONGER (GPU-efficient long-context).
+  \item \textbf{Two-stage ``top-k history'' retrieval creates inconsistency:} LONGER highlights upstream/downstream mismatch in common practice.
+  \item \textbf{Multi-surface production makes shared representations valuable:} DV365 shares embeddings across 15 models; OneMall/OneRec unify scenarios.
+  \item \textbf{Unified backbones reuse LLM infra optimizations:} OneTrans emphasizes KV caching, memory-efficient attention, mixed precision.
+  \item \textbf{Alignment is hard:} OneRec family focuses on RL alignment and real-feedback shaping; proxy rewards can be hacked.
+  \item \textbf{Concept drift forces online learning + embedding-table engineering:} Monolith centers sparse/dynamic features and real-time training.
+\end{itemize}
+
+\section{Paper set (core + new for V2)}
+\subsection*{Core (reviewed together)}
+\begin{itemize}
+  \item OneRec-V1 (Kuaishou): \texttt{papers/Kuaishou\_OneRec\_V1/}
+  \item OneRec-V2: \texttt{papers/OneRecTeam\_OneRecV2/}
+  \item HSTU (Meta): \texttt{papers/meta\_hstu/}
+  \item Ultra-HSTU: \texttt{papers/meta\_ultra\_hstu/}
+  \item PLUM (Google/YouTube): \texttt{papers/google\_plum/}
+  \item OneTrans (ByteDance): \texttt{papers/bytedance\_onetrans/}
+\end{itemize}
+
+\subsection*{New industry papers included for V2 expansion}
+\begin{itemize}
+  \item DV365 (Instagram): arXiv:2506.00450
+  \item LONGER (ByteDance): arXiv:2505.04421
+  \item TransAct V2 (Pinterest): arXiv:2506.02267
+  \item Monolith (ByteDance): arXiv:2209.07663
+\end{itemize}
+
+\section{Next steps}
+\begin{enumerate}
+  \item Extract and consolidate the \textbf{References} sections from the core papers, and build a reference graph (themes: long-seq, SIDs/tokenization, RL alignment, infra/embedding tables).
+  \item Add 5--10 more industry papers following the citation graph (e.g., SIM/TWIN/DIN/TransAct/LONGER/Monolith-related).
+  \item Expand this V2 into a full evidence-backed review (quotes + tables) and publish as a PR (PDF + \LaTeX source).
+\end{enumerate}
+
+\end{document}
