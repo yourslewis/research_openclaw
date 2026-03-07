@@ -1,0 +1,859 @@
+                                              SilverTorch: A Unified Model-based System to Democratize
+                                                        Large-Scale Recommendation on GPUs
+                                             † Bi Xue1 , † Hong Wu1 , † Lei Chen1 , † Chao Yang1 , Yiming Ma1 , Fei Ding1 , Zhen Wang1 , Liang Wang1 ,
+
+                                                  Xiaoheng Mao1 , Ke Huang1 , Xialu Li1 , Peng Xia1 , Rui Jian1 , Yanli Zhao1 , Yanzun Huang1 ,
+                                              Yijie Deng1 , Harry Tran1 , Ryan Chang1 , Min Yu1 , Eric Dong1 , Jiazhou Wang1 , Qianqian Zhang1 ,
+                                                Keke Zhai1 , Hongzhang Yin1 , Pawel Garbacki2 , Zheng Fang1 , Yiyi Pan1 , Min Ni1 , Yang Liu1
+                                                                                         1 Meta Platforms        2 Fireworks AI
+
+                                                     {bixue, hongwu, leich, chaoyang, yma007, phillipding, zhenwang, liangw}@meta.com
+arXiv:2511.14881v1 [cs.IR] 18 Nov 2025
+
+
+
+
+                                                          {seanmao, huangke, xialuli, pengxia, rjian, yanlizhao, yanzunh}@meta.com
+                                             {yijied, harrytran, ryanchang, miyu58, ericdong, jiazhouwang, lillianz, zhaikeke, hzyin}@meta.com
+                                                                                       pawel@gmail.com
+                                                                      {zhengfang, yiyipan, minn, yangliu991}@meta.com
+                                                                                    ( † equal contributions)
+                                         ABSTRACT                                                                users and items [12, 26]. Recommendation systems face unique chal-
+                                         Serving deep learning based recommendation models (DLRM) at             lenge during inference, as trained models cannot be served directly.
+                                         scale is challenging. Existing systems rely on CPU-based ANN            At inference time, the inputs are user features only, returning a list
+                                         indexing and filtering services, suffering from non-negligible costs    of items. Industrial scales contain 10 - 100 million items, which is
+                                         and forgoing joint optimization opportunities. Such inefficiency        computationally infeasible to rank all during serving. Consequently,
+                                         makes them difficult to support more complex model architectures,       a multi-stage design is widely adopted, comprising a retrieval stage
+                                         such as learned similarities and multi-task retrieval.                  and multiple ranking stages. Each stage defines its model, and later
+                                             In this paper, we propose SilverTorch, a model-based system         stage models typically rely on richer features and utilize more
+                                         for serving recommendation models on GPUs. SilverTorch unifies          complex architectures. This design works like a funnel. First, the
+                                         model serving by replacing standalone indexing and filtering ser-       retrieval model narrows the item candidate pool to thousands of
+                                         vices with layers of served models. We propose a Bloom index            items by formulating the task as a Approximate Nearest Neighbor
+                                         algorithm on GPUs for feature filtering and a tensor-native fused       (ANN) search problem in vector space, identifying relevant items
+                                         Int8 ANN kernel on GPUs for nearest neighbor search. We further         based on vector similarities. This is commonly implemented using
+                                         co-design the ANN search index and filtering index to reduce GPU        libraries like Faiss [14, 21], RAFT [32] or a dedicated vector database
+                                         memory utilization and eliminate unnecessary computation. Bene-         system like Milvus [33]. Meanwhile, the retrieval stage incorpo-
+                                         fit from SilverTorch’s serving paradigm, we introduce a OverArch        rates feature filtering to match users’ feature attributes in multiple
+                                         scoring layer and a Value Model to aggregate results across multi-      dimensions, removing irrelevant items. These filters are mostly
+                                         tasks. These advancements improve the accuracy for retrieval and        implemented using inverted-index mechanism. The retrieved items
+                                         enable future studies for serving more complex models. For rank-        are then passed to ranking models. The ranking stage can be further
+                                         ing, SilverTorch’s design accelerates item embedding calculation by     divided into an early-stage ranking(ESR) model, which trims the
+                                         caching the pre-calculated embeddings inside the serving model.         set to hundreds, and a late-stage ranking(LSR) model, which selects
+                                             Our evaluation on the industry-scale datasets show that Silver-     the final tens of items. Ranking models can be served directly since
+                                         Torch achieves up to 5.6× lower latency and 23.7× higher through-       the number of items to be ranked is small.
+                                         put compared to the state-of-the-art approaches. We also demon-            While existing works attempt to fill this gap, they introduce addi-
+                                         strate that SilverTorch’s solution is 13.35× more cost-efficient than   tional services including ANN search, feature filtering, and caching.
+                                         CPU-based solution while improving accuracy via serving more            These systems are originally designed for general-purposed ap-
+                                         complex models. SilverTorch serves over hundreds of models on-          plications, requiring customized optimizations when conducting
+                                         line across major products and recommends contents for billions         to recommendation. Specifically, for recommendation, modern re-
+                                         of daily active users.                                                  trieval models expect the ANN service to return tens of thousand
+                                                                                                                 items for further scoring. This is not effectively supported by ex-
+                                                                                                                 isting libraries. Similarly, inverted-index based filtering approach
+                                         1    INTRODUCTION                                                       has proven to be efficient for text-based search. However, in recom-
+                                                                                                                 mendation, the cardinality of the feature attributes for each item
+                                         In the past decade, recommendation systems have become a fun-
+                                                                                                                 is orders of magnitude smaller. Furthermore, service-based recom-
+                                         damental way for individuals to discover information. Behind the
+                                                                                                                 mendation systems must handle the version consistency because
+                                         scenes, embedding-based Deep learning recommendation models
+                                         (DLRM) play a critical role in learning the relationship between
+different parts of the serving model are split across services to gen-        return retrieval items. Furthermore, we enable multi-task retrieval
+erate a logical snapshot during inference. Such system divergence             together with a in-model aggregation layer (referred to as Value
+and the versioning challenge add unexpected delays and complexi-              Model) to compute the overall score across multi-task objectives.
+ties. In this work, we propose SilverTorch, a unified model-based             For ESR models, SilverTorch model contains pre-calculated item
+system built on PyTorch. Rather than building standalone services,            embeddings that are loaded into GPU memory during serving to
+a SilverTorch model defines the ANN index and feature filtering as            reduce network overhead and calculation cost. For a multi-stage
+parts of serving model itself. SilverTorch also pre-fetches item em-          recommendation system, SilverTorch’s serving paradigm enables
+beddings and features into serving model to accelerate early-stage            more functionalities into retrieval models and ESR models, aligning
+ranking(ESR) models, eliminating additional requests for calling              the objectives of retrieval and ranking more consistently through-
+caching service. By leveraging such a in-model design, SilverTorch            out the recommendation funnel(known as funnel consistency). We
+not only provides unified recommendation stack on top of PyTorch              summarize our contributions as follows:
+that naturally avoids handling versioning across services, but also           • We propose SilverTorch, a unified model-based system for serv-
+simplifies the client-side logic. Instead of handling multiple requests          ing large-scale recommendation models. SilverTorch unifies the
+to different services during serving, client sends a single request to           development of recommendation within PyTorch, bridges the
+the runtime that serves SilverTorch models.                                      gap between model design and online serving, simplifies client-
+   Another major challenge in serving large-scale recommendation                 side logic to orchestrate recommendation requests. SilverTorch
+models is compute scalability. As candidate pool grows, retrieval                replaces the standalone ANN service and feature filtering service
+models must build larger-size index for efficient ANN search and                 with in-model tensor operators of served model. It avoids the
+feature filtering. Meanwhile, recommendation models are becoming                 version inconsistency issue of existing solutions.
+deeper and more complex. Recent retrieval approaches adopt more               • For retrieval, we introduce a novel bloom index algorithm for
+complex learned structures to replace the dot-product to represent               feature filtering and a fused Int8 ANN kernel on GPUs. We fur-
+similarities [37]. There is also trend to incorporate richer historical          ther propose a co-designed index algorithm combining ANN
+user-item interaction data as input features [38], further increasing            search with feature filtering. It can largely reduce memory uti-
+computational demand. Unfortunately, existing solutions cannot                   lization and eliminate unnecessary computation. For Early Stage
+satisfy these needs. First, existing recommendation systems adopt                Ranking, we pre-compute item embeddings and populate em-
+CPU-based ANN indexing and feature filtering [12, 18, 20, 31]. To                bedding cache into GPU memory for serving. To the best of our
+the best of our knowledge, no existing work studying feature filter-             knowledge, bloom index algorithm is the first attempt to con-
+ing on GPUs. For ANN search, there are libraries implement ANN                   duct feature filtering on GPUs and the first study applying it to
+algorithms on GPUs [21, 33]. However, they only supports topk and                recommendation systems.
+probes less than 2048 [16] and topk less than 1024 [24]. This limits          • We extend existing retrieval models by adding a OverArch scor-
+the evolution of retrieval models. For example, advanced retrieval               ing layer as learned similarities instead of dot product. We also
+models require to search hundreds of thousands of items from ANN                 support multi-task retrieval with a in-model value model to
+and re-rank them in the following interaction layers. The CPU-                   aggregate overall scores. These functionalities improve model
+based ANN search and filtering can scale out by adding more CPU                  accuracy and enable more advanced recommendation models.
+servers to partition the larger index, but it quickly becomes expen-          • We evaluate SilverTorch on industry-scale datasets with a 10
+sive and inefficient to server complex models for online recommen-               million items dataset and a 80 million items dataset respectively.
+dation. CPU-based index building mechanisms such as HNSW [23]                    The result shows SilverTorch improves the serving throughput
+also delay the model deployment because they rely on updating                    by 23.7× and reduces the latency 5.6× compared to the state-of-
+parallelism-unfriendly data structures like graphs and trees [11, 23].           the-art CPU-based baselines. By introducing OverArch scoring
+In contrast, GPU offers orders of magnitude higher throughput and                layers and multi-task retrieval with in-model Value Model, Sil-
+has proven to be more cost-efficient. Second, isolated service calls             verTorch achieves over 5.6% recall improvement and is 13.35×
+inhibit the joint optimization across serving components. Interme-               cost efficient.
+diate results between services must be serialized and transformed                The paper is structured as follows. In Section 2, we motivate
+to appropriate formats. Such unnecessary data transformation and              the challenges with detailed analysis. Section 3 shows the overall
+network cost increase serving latency. SilverTorch leverages Py-              design of SilverTorch. We present the detailed design of SilverTorch
+Torch to fully utilize GPUs, introducing model-based ANN search               model in Section 4 and discuss its extensibilities in Section 5. Finally,
+and bloom index filtering designed for recommendation systems.                we analysis the experimental results in Section 6 and discuss the
+Both the ANN search and the feature filtering processes during                future work in Section 7. Section 8 concludes the paper.
+inference are unified as tensor computation, consistent with other
+model serving operators. Such unified design enable us to further             2 BACKGROUND AND MOTIVATION
+optimize the ANN search and feature filtering by co-designing them
+to further reduce GPU memory allocation during inference and                  2.1 Multi-stage Recommendation Flow
+eliminate unnecessary computation.                                            Features for recommendation models are categorized into dense
+   Benefit from SilverTorch’s in-model design, we extend existing             (numerical) and sparse (categorical). User and item features contain
+retrieval models by introducing a OverArch scoring layer to fur-              both types, with contextual features (e.g., timestamp) bundled with
+ther learn user-item interactions. The initial returned items from            user features. Retrieval models use representative user and item
+ANN search and filtering are re-ranked by the OverArch layer and              features but exclude cross features. ESR models add interaction
+                                                                          2
+                                       Online Serving                                Dot Product
+
+                                  Recommendation Request
+
+
+                                     Features    Item Ids
+
+                                                                                                                                             Candidate
+                                                                             User Tower     Item Tower                    Item Model Va      Pool Vb
+                          Caching Service        Feature Filtering Service
+                                        OverArch Layer
+                                                                                   Model Trainer                              ANN Index Builder
+                        Memcache / Redis               ElasticSearch
+                              CPUs                          CPUs                             O(Minutes)                                O(Hours)
+
+                         User Tower Model           ANN Search Service
+
+                      Model Serving Runtime       Standalone(Faiss/Milvus)
+                              GPUs                     CPUs or GPUs
+                                                                                    User Tower Va                          Index Vc
+                                       Serving Systems
+                                                                                                        Model Snapshot Vd
+                                                                                       Predictor                      ANN Search Server
+
+                  (a) Service-based Recommendation Serving                   (b) Version Challenge of Service-based Recommendation
+
+
+Figure 1: Motivation Examples: Figure 1(a) shows the service-based recommendation serving. Figure 1(b) shows the versioning
+challenge of service-based retrieval.
+
+
+layers after concatenating user and item embeddings. LSR models                       TensorFlow [1], and Jax [15] which provide user-friendly Python
+use comprehensive features, including cross features, and adopt                       interface for building and training neural networks. They convert
+more complex architectures. The embedding in our paper refers                         models into a graph of kernel operators on GPU during execution.
+to the vector representation generated from either the user-side                      However, since ANN search and feature filtering are standalone
+layers(User Tower) or the item-side layers(Item Tower). Typical                       systems, optimizing them requiring diving into different libraries
+flow of service-based recommendation systems include training,                        and service deployments. Table 1 lists popular options, including
+post-processing and online severing. In offline part, post-processing                 our internal indexing system, referred to as System A. As shown,
+generates item embeddings from trained retrieval model and build-                     Elasticsearch and System A support both ANN search and feature
+ing inverted index for feature filtering such as location, language                   filtering, but running on CPUs. Faiss and Milvus offer GPU-based
+and interest. The item embeddings are used to build ANN search                        solutions for ANN search, but have limitations for topk and probes.
+index. In online part, as shown in Figure 1(a), a request first triggers              Furthermore, standalone services need to implement duplicated
+retrieval stage. User features are loaded from the feature store to                   logic such as scheduling, resource management(e.g., thread pool,
+compute user embedding from the User Tower, which is used as the                      GPU streams, batching) and data movements. Such isolation makes
+query for ANN Search. Meanwhile, recommendation request is also                       the resource fragmented and utilization sub-optimal [25].
+sent to the filtering service. Finally, results are merged and sent to
+ESR. User embedding and item embedding for ESR are computed
+through forward pass of the model. The LSR stage takes ESR output                     Table 1: Comparison of Various ANN and Filtering Systems
+and return final items. This flow is widely adopted across industrial
+and academic studies. However, it has two major drawbacks.                              Name                Usage           GPU   Language          Limit          Service
+                                                                                        Elasticsearch   ANN + Filtering      N      Java               /             N
+                                                                                        System A        ANN + Filtering      N      C++                /             Y
+                                                                                        Faiss               ANN              Y      C++       topk, nprob ≤ 2048     N
+2.2    Limits of Service-based Recommendation                                           Milvus              ANN              Y       Go          topk ≤ 1024         Y
+Lack of Co-Design. As shown in Figure 1(a), traditional service-
+based recommendation systems suffer from isolated optimization,
+where individual services are designed independently. For instance,                   Version Inconsistency. Figure 1(b) shows the process of generat-
+feature filtering service and ANN search service build separate                       ing a serving model snapshot during post-processing under service-
+indexes using distinct data structures. Likewise, the caching ser-                    based approaches. After training, it first transmits User Tower to
+vice introduces the network overhead and necessitates the data                        predictor with version Va. Item Tower with the same version is sent
+movement between GPU and CPU. For recommendation serving,                             to ANN index builder to build item embeddings from candidate
+the latency requirement is usually less than 100ms. Adopting a                        pool and item tower. The pool itself continues updating and bumps
+unified design approach facilitates co-design across recommenda-                      its versions periodically. The constructed index with version Vc
+tion services, making it friendly to further disaggregate serving                     is deployed to the ANN server. Together with User Tower, it pro-
+components based on serving characteristics(e.g. compute bound,                       duces a logical snapshot with version Vd. In our deployment of 100
+memory bound) rather than pre-defined boundaries.                                     million items, it takes few minutes to commit user tower modules
+Authoring Divergency. The development of recommendation                               into predictor while multiple hours to construct ANN index and
+models primarily rely on platforms such as PyTorch [30], TorchRec [19],               filtering index. Keeping user and item embedding versions in sync
+                                                                                3
+is challenging in the presence of failures. We experienced a 30%             whole stack of recommendation from data processing, training to
+drop in performance metrics due to a inconsistent version commit.            inference, but it is a combination of different libraries.
+
+2.3    Limitation of CPU-based Compute
+Simplified Similarity. Cosine-similarity-based kNN is commonly               3    SILVERTORCH OVERVIEW
+used at the retrieval stage. Cosine similarity is equivalent to dot
+                                                                               We propose SilverTorch, a model-based approach to unify recom-
+product when vectors are normalized. However, this design con-
+                                                                               mendation systems. Instead of building standalone services, Silver-
+siders the user and item features independently. Recent studies
+                                                                               Torch defines model layers to replace the functionalities of depen-
+on learned similarities [13] [37] remove this constraint, enabling
+                                                                               dent services for serving. A SilverTorch model consists all serving
+retrieval models to generate more accurate results. To support these
+                                                                               components inside the model itself. The inference flow is no differ-
+complex structures, we not only need to get much more items and
+                                                                               ence than a forward function execution of tensor operators. Figure
+item embeddings from ANN search service, but also need to allocate
+                                                                               2 illustrates the overall workflow of SilverTorch and its prototype.
+additional resource for computing the top interaction layers.
+                                                                                  After model training, the post-processing before serving is de-
+Expensive Multi-task Retrieval. While multi-tasks are widely
+                                                                               fined as SilverTorch publish. We initially load trained retrieval and
+adopted in ranking stage, retrieval stage rarely incorporates it due
+                                                                               ESR models, which we refer to as root models. The embedding eval-
+to the constraint of serving efficiency. Such inconsistency nega-
+                                                                               uator utilizes both the item features from the candidate pool and the
+tively impacts recommendation quality. To mitigate this, multi-task
+                                                                               root model to calculate the item embeddings. The item embeddings
+retrieval is important. Assume we want to predict three objectives
+                                                                               layer are added into root models. We leverage GPUs calculating
+(like, share and comment) and use a value model to compute final
+                                                                               the embeddings to speedup the publish. The item embeddings of
+score, to support same amount of traffic, resources and operational
+                                                                               the retrieval model are also processed by the ANN index builder. It
+cost grow linearly with number of tasks. Even though the ANN
+                                                                               quantizes the embeddings to Int8 precision and adopts KMeans++-
+search servers process each request in a scatter-gather manner,
+                                                                               based [3] clustering to the embedding vectors. This process also
+overall latency is determined by the straggler of all CPU servers.
+                                                                               runs on GPUs to accelerate the publish. For feature filtering, Sil-
+                                                                               verTorch introduces a novel signature-based GPU index(referred
+2.4 Related Work                                                               as Bloom Index) instead of using inverted index. This high-speed
+Modern recommendation systems largely adopt two-tower architec-                index is inspired by the bloom filter and BitFunnel [17], transform-
+tures to learn user and item features in vector space [12] [27] [7] [35] [34]. ing online index matching to bit operators. Both the ANN index
+To efficiently ranking the items given a user embedding, a critical            and bloom index are represented as a group of tensors that added
+problem is vector search, which is a trending topic in domains like            into root model. These tensors serve as parameters of the model
+natural language processing [22], computer vision [36], search [18],           that take query tensor from a recommendation request as input,
+and recommendation systems [40]. Existing solutions are either                 conduct kernel operators on GPUs and output tensor results. Mean-
+using libraries like Faiss [14] as dedicated services [18] or building         while, User Tower, OverArch layers, and Value Model are quantized
+a vector database [33] [29]. In contrast, SilverTorch provides a Py-           to BFloat16 and constructed as model parameters by correspond-
+Torch native implementation of nearest neighbor search running                 ing builders. The model composer assembles all these components
+on GPUs and is highly efficient and customizable. Faiss [21] and               into a SilverTorch model. Finally, the model optimizer compiles the
+Milvus [33] also support running on GPUs but they limit the the                eager-mode SilverTorch model into a graph representation and ap-
+number probes and topk. For feature filtering, traditional search              plies graph-level optimizations, lowering and scripting. The output
+engines [9] [10] [18] employ inverted index and can be also ap-                of publish is a SilverTorch model snapshot representing as a model
+plied to the recommendation. All of these systems are CPU-based                definition with different layers of model parameter tensors that can
+solutions and introduce overhead and cost when serving recom-                  be served in pure C++ runtime(referred to as predictor).
+mendation models. SilverTorch’s bloom index idea is motivated by                  During online serving, the predictor runtime is simplified as a
+Bitfunnel [17], which tries to replace the inverted index in the text          forward function executing of a SilverTorch model. The retrieval
+search with bloom-filter-based signatures. However, Bitfunnel is a             process is triggered first. The SilverTorch retrieval model extracts
+CPU solution and not specifically designed for recommendation.                 different types of user features and the filtering query from rec-
+   Recommendation models are becoming more complex in terms                    ommendation request, executes a sequence of kernel operators on
+of compute, model complexity and data [2] [39]. Serving these                  GPUs. First, the user layer computes the user embedding. Subse-
+models is challenging but is not well studied. SilverTorch is the              quently, the Bloom index layer further filters out irrelevant items
+effort to propose the serving solution to support large-scale recom-           and generate a mask tensor. The user embedding and the mask
+mendation. [37] extends the dot-product retrieval with the idea of             tensor are then fed into the ANN layer to search approximately
+mixture of logits and h-indexer and shows the advantages using                 tens to hundreds of thousands of items. OverArch layers fetches
+such more complex structures. But it does not discuss serving the              corresponding item embeddings from embedding cache of retrieval
+end-to-end retrieval flow. LiNR [8] proposes model-based retrieval             model, and re-rank these items by calculating scores and aggregate
+on GPUs. Unlike SilverTorch, LiNR does not propose a co-designed               using the value model across multi-tasks. Final retrieval result con-
+index and does not propose a GPU solution for filtering. It also does          tains thousand-scaled ids and triggers the ESR. The ESR request
+not discuss the cost efficiency and does not discuss ESR models.               contains both user features and the retrieval results. The user em-
+Merlin [28] discusses the possibility of using GPU to accelerate the           bedding of ESR is calculated, the item embeddings are looked up
+                                                                         4
+                                     Offline Publishing                                                          Online Serving
+                                     Feature Cache
+                                                                                                           Recommendation Requests
+                                        Builder
+     Feature Store
+                                                                                                              Features      Item Ids
+                                      Bloom Index
+                                         Builder
+     Item Pool                                                                                                  Value Model Layer
+                                       ANN Builder
+                     Embedding                             Model               Model                                OverArch Layer
+                     pre-compute       Embedding          Compose             Optimizer
+    Trained Model                                                                                    Feature Cache             Embedding Cache
+                                      Cache Builder
+                                       User Tower                                                                                Bloom Index
+                                                                                                       User Tower
+                                        Builder                                                                                ANN Search Index
+                                        OverArch                                                            SilverTorch Serving Model
+                                         Builder
+                                       Value Model
+                                         Builder
+
+                                          PyTorch                                                   Unified Model Serving Runtime (Predictor)
+                                           GPUs                                                                        GPUs
+
+
+
+
+      Figure 2: Overall workflow of SilverTorch model publish and serving and Pseudocode of SilverTorch model definition.
+
+
+from embedding cache, followed by following operators. The ESR                AND (item_lang = "EN" OR item_lang = "ES")
+model typically returns hundred-scaled items.
+
+4      SILVERTORCH MODEL DESIGN                                               The user embedding (user_emb) is computed from User Tower,
+The idea of SilverTorch is to define the recommendation serving               while item attributes such as item_country and item_lang are pre-
+components as model, which provides a unified interface and en-               defined. Query parameters include user-specific features (user_emb,
+ables the co-design between components. This section first intro-             user_country, user_lang1, user_lang2). To support the ANN search
+duces key abstractions in SilverTorch, and discuss in-model design            sub-query, SilverTorch provides a tensor-native Int8 ANN kernel
+containing the bloom index based feature filtering and a fused Int8           leveraging the IVF(inverted file indexing) algorithm. It first probes
+ANN search. Finally, we discuss a co-designed ANN search and                  and expands the ANN operator into a subquery that matches a
+feature filtering algorithm. Overall, SilverTorch follows two design          subset of items with high overlap with the exact K nearest neighbors.
+principles.                                                                   Then it calculates the topk items within each cluster and aggregates
+   Index as Model. In recommendation systems, both ANN search                 to the global topk result. For feature filtering, we propose bloom
+and feature filtering are required to efficiently serve online requests       index, which transforms the feature filtering process into bit-wise
+within a service level agreement(e.g., 80ms P99 latency). A typical           tensor operations on GPUs. Benefit from the unified stack, we co-
+recommendation query can be defined as follows:                               design the feature filtering with ANN search by proposing a ANN
+                                                                              search and filtering co-designed kernel. The whole processes are
+ANN_Index(user_emb) AND
+                                                                              executed inside a single runtime(referred to as predictor) since both
+(feature1=value1 OR feature1=value2 OR ...) AND
+                                                                              the ANN search and feature filtering are consistent with running
+(feature2=value1 OR feature2=value2 OR ...) AND..
+                                                                              other layers of the model inference. This design eliminates the
+A concrete example is below:                                                  communication to standalone indexing services and fully utilizes
+ANN_Index(user_emb) AND item_country = "US"                                   the GPU resources for serving recommendation queries.
+                                                                          5
+   Embedding and Feature Cache. For Early-Stage-Ranking mod-                 footprint because it stores the actual feature values using int64.
+els, item embeddings serve as item representations and are com-              To overcome these limitations, we propose a bloom-filter based
+bined with user embedding as inputs to OverArch. A typical ESR               GPU indexing structure, named the Bloom Index. It addresses the
+model calculates thousand-scale items online. To reduce compu-               warp divergence of forward index, ensures contiguous memory ac-
+tational cost online, SilverTorch pre-computes item embeddings               cess through bitwise operations and significantly reduces memory
+during publish and populates results into GPU memory as em-                  consumption by providing a signature bits for each item.
+bedding cache. Frequent embedding look-ups benefit from High                     The feature filtering problem can be formulated as follows, given
+Bandwidth Memory(HBM) that allows extracting a batch of item                 a list of items V, where each item is represented as a list of features:
+embeddings. The in-model embedding look-up removing the depen-
+                                                                                                    𝑉 = {𝑉𝑖 = [𝑓1, 𝑓2, ...𝑓𝑡 ]}                  (1)
+dency of caching services and reduces network cost. For advanced
+retrieval models, we introduce OverArch which takes item ids from            Given a query Q, which can also be represented as a list of features:
+ANN and bloom index as input to re-rank items. The embedding
+cache can be also used here.                                                                            𝑄 = [𝑓1, 𝑓2, ...𝑓𝑡 ]                     (2)
+                                                                             The goal is to find a list of items that meet following criteria:
+4.1    Bloom Index                                                                                𝑅 = {𝑉𝑖 ∈ 𝑉 | 𝑄 ∩ 𝑉𝑖 = 𝑄 }                     (3)
+A recommendation query contains feature filtering parts to match
+relevant item features to user’s attributes. The filtering subquery          Bloom filter is a hash-based structure used to check whether an
+is represented as nested logical expression with values. A com-              element exists in a set. In bloom index design, we construct a M-bit
+mon mechanism is to build inverted index, which maps each terms              bloom filter for each item, denoted as VB_i. For each feature, we
+to a list called posting list. Similarly, in recommendation, we can          apply K hash functions to compute hash_i(feature) % N and set
+build such index to map each feature value to a items list. Unfortu-         the corresponding bits in bloom filter to 1. Similarly, we generate
+nately, inverted index is not well suited to GPUs. First, in contrast        a M-bit bloom filter for the filtering query, denoted as QB, and
+to text terms in web search that follows a Zipf’s distribution with          apply previous k hash functions to mark corresponding bits to 1.
+many shorts postings, recommendation features are typically broad            By applying this to (3), we obtain:
+and dense. The lack of sparsity removes the efficiency gains that                        𝑅 = {𝑉𝑖 ∈ 𝑉 | 𝑉𝑖 = 𝑉 𝐵𝑖 ∧ (𝑄𝐵&𝑉 𝐵𝑖 = 𝑉 𝐵)}              (4)
+inverted indexes provide in the Needle-in-the-Haystack search
+scenarios. Second, the list-based structure of inverted indexes is               To implement (4), each GPU thread first iterates through the bits
+inherently sequential and poorly aligned with modern accelera-               of QB and then iterates each item in its partition to compute the
+tors. These limitations motivate us to design a more efficient index         matches. Figure 3(a) illustrates this process using a real example.
+structure of feature filtering.                                              While transforming filtering into bit manipulation of matrix, it has
+    SilverTorch adopts the design by placing the indexing compo-             two drawbacks. First, each GPU thread processes one item at a time.
+nents inside serving model. We revisit the feature filtering problem         Second, items corresponding to 0 bits in QB are also evaluated. We
+with following observations. First, we know the general structure            optimize it by examining only bits set to 1 in QB. If all the corre-
+of filtering query when we build the SilverTorch model so that we            sponding bits in VB_i are also 1, the item is a match. By rotating
+can leverage this knowledge to arrange data in specific structures.          the matrix, we isolate the rows containing 1 bits in the query and
+Second, in recommendation systems, each item only contains lim-              skip the rest. Such transpose allowing multiple items to be matched
+ited feature values comparing to the high feature cardinality in text        simultaneously while eliminating the bit masks necessary to per-
+retrieval. We found forward index could evaluate against the query           form Boolean computation. We only calculate rows containing the
+independently. The fact that the forward index search is stateless           1 bit from QB by performing a bit-wise AND operation between
+implies that all items can be evaluated in parallel, making it a good        all the matched rows. Any 0 bits indicate a non-match, while 1 bits
+fit for GPUs. During filtering, different thread processes a partition       indicate a match. Figure 3(b) shows the process how our bloom
+of items and matches local results. This approach could largely              index works. QB is a 8-bit bloom filter, and V2 and V6 are matched
+improve efficiency in high-recall search scenario compared to the            items. We use a single instruction to execute a 64-bit AND opera-
+multi-way merge of inverted index search. In SilverTorch, we define          tion (PTX: and.b64), meaning each thread processes 64 items using
+the operators in PyTorch, therefore, the tensor layout of forward            a single instruction. Comparing to forward index, which matches
+index can be represented as following tensors: feature_ids tensor            item-by-item iterative inside a partition and requires a Boolean to
+for feature identifiers, feature_values tensor for grouped feature           store the result for each item, bloom index process 64 items at one
+values by (item, feature_ids), and feature_offsets tensor to index           time and could store the results of 64 items using just one int64.
+feature_values, defining value boundaries for each feature. The              For a case of 40 million items, the data can be splitted into 625,000
+                                                                                                                 625,000
+feature_values for a given (item, feature_id) pair are sorted. How-          partitions. Each thread processes #Threads  partitions of items. Bloom
+ever, although forward index allows parallel computation across              index relies on bloom filter, which may introduce false positives
+items, they are sub-optimal for GPUs. Offset lookups for each (item,         due to hash collision. By tuning the bloom filter size M and the
+feature) pair create irregular and non-contiguous memory access              number of hash functions K based on the number of features N
+patterns, limiting throughput when multiple filter conditions must           could keep the rate very low. Additionally, bloom index is primarily
+be matched. And since the GPU memory is expensive and largely                used in retrieval stage so rare false positive items can always be
+impact the throughput, forward index requires a large memory                 evicted by future ranking stages.
+                                                                         6
+                                                                           QB     V 1 V2 V3 V4 V5 V6 V7 V8 …
+ VBi                                                                        0
+
+                                                                            1      0        1      0   1   1     1     1   0   …
+
+                                                                            0
+
+                                                                            0                          &
+  QB                                                                        1      1        1      1   1   0     1     0   0   …
+
+                                                                            0
+
+                                                                            0                          &
+                                                                            1      1        1      0   0   1     1     0   1   …
+ QB & VBi
+                                                                                           Match               Match
+
+
+                                                                 (b) After transposing the bit matric, bloom index only            (c) Each row represents a bit in bloom filter, and
+                                                                 matches non-zero rows if the query bits and can match             each column represents the bit settings of 64
+   (a) Bloom Index Matching given query bits and an item bits    items simultaneously. In this example, we only need to            items’ bloom filter at the corresponding bit position.
+                                                                 apply bit matching for 3 bits of input query QB, then a           An example using a Bloom Index with 64 bits
+                                                                 bit-AND of the three results, return two matches.                 bloom-filter to do a language filter for a 40 Million
+                                                                                                                                   candidate pool.
+
+
+
+                                                     Figure 3: Bloom Index Design for Feature Filtering
+
+
+4.2    Fused Int8 ANN Search                                                                        In recommendation systems, we found that even if we could
+ANN search is critical for retrieval in recommendation. Existing                                get precise nearest neighbor search results, overall accuracy for
+solutions rely on standalone services. For example, we can build a                              retrieval may not be perfect. The reason is the dot-product over
+service leveraging the open-source Faiss library, or deploy a vector                            simplifies the retrieval model. Additionally, since the ANN index
+search service such as Milvus. However, both of them are general-                               stores complete embedding tensors together with cluster-related
+purposed and can not satisfy the requirements of large-scale recom-                             tensors in memory, it becomes the bottleneck when candidate pool
+mendation systems. For example, although both Faiss and Milvus                                  size as well as the model size increase. Base on these observations,
+supports executing ANN search on GPUs, a hard limitation is that                                we propose a INT8 quantized fused ANN search algorithm. By
+both limit the topk and number of probes. In real recommendation                                representing each embedding with 8-bit integer and leveraging
+model design, ANN search is only part of the retrieval process, and                             GPU instructions such as dp4a(an instruction that capable of com-
+it requires returning hundreds of thousands of items from ANN                                   puting four multiplications and additions in a single instruction),
+search for further scoring. Therefore, most of existing recommen-                               we achieve much higher throughput and lower memory footprint
+dation systems in production still adopt CPU-based ANN search                                   by half. The quantization process occurs during SilverTorch model
+during retrieval due to its scalability and maturity. As discussed,                             publish, involving computing the global min and max values among
+CPU-based retrieval hinders serving more complex model architec-                                all the embedding values. Then the max and min values are scaled
+tures such as multi-task retrieval and OverArch scoring layers.                                 to fit within the range [-128, 127], representing the range that can
+    To overcome above limitations, we propose a tensor-native ANN                               be represented by each integer. Each embedding is then assigned
+search kernel in SilverTorch, leveraging tensor as ANN index con-                               an integer representation based on the range it falls into, using
+tainer. The tensor-native design can be directly incorporated into                              the corresponding integer within [-128, 127]. We found that our
+any ML model serving stack and is by nature parallel-friendly on                                INT8 quantized fused ANN search has limited quality loss but can
+GPUs. We adopt the clustering-based IVF algorithm that can be                                   improve the serving performance a lot. The performance headroom
+transformed into two matrix multiplication(MM) operations inter-                                can fund serving more complex model to further scoring using
+nally. First, calculate the dot product between query embedding and                             neural network blocks. Our algorithm could effectively support
+all centroid embeddings. Second, construct the item embeddings                                  searching arbitrary topk and number of probes. In practice, it could
+from previous selected clusters and identify the topk similar items                             achieve searching with 64 probes of top 2048 items without any
+based on their proximity to the query embedding. Unfortunately,                                 accuracy loss. Note that for index building during publish, we im-
+the bottleneck of this algorithm lies in the index selection step that                          plement KMeans++ [3] to mitigate the problem of local minimal.
+generates a temporary embedding indices tensor to get embeddings
+for compute the topk. Additionally, the performance of index selec-
+tion operator itself is slow. To address these issues, we introduce a                              4.3         ANN Search and Filtering Co-design
+fused index-matmul operator after probing, it streams item embed-                               In service-based model serving systems, data are transferred be-
+dings directly from the embedding table and computes dot-product                                tween ANN search, feature filtering and remaining model inference
+with batched queries on-the-fly, avoiding the construction of a large                           components. There are services that provide a interface to support
+intermediate tensor. By assigning each warp to process a contigu-                               both ANN search and feature filtering(e.g., Elasticsearch or Mon-
+ous tile of items, this operator fully exploits GPU parallelism and                             goDB), but data are stored with different formats for filtering and
+achieves coalesced memory access.                                                               ANN search. In contrast, SilverTorch unifies the serving operators
+                                                                                                within PyTorch stack. All operators are running in the same runtime
+                                                                                                environment and different types of indexes are stored as tensors
+                                                                                       7
+                                                                            5.1    OverArch Scoring
+                                                                            In the two tower model design, user-item similarities are scored
+                                                                            using the dot product. Unfortunately, it has no trainable parameters
+                                                                            so that it over-simplifies the interactions. Without SilverTorch’s
+                                                                            GPU-based approach, it is difficult to meet the latency requirement
+                                                                            by adding these interaction layers. SilverTorch largely reduces in-
+                                                                            ference cost so that retrieval can be extended to be more complex
+                                                                            beyond nearest neighbor search. On top of ANN search and feature
+                                                                            filtering query defined in 4, a SilverTorch model comes with addi-
+                                                                            tional scoring layers(named as OverArch layers). The retrieval first
+                                                                            execute the query and filter out K0 items(in the scale of O(10,000)
+                                                                            to O(100,000)) from original candidate pool. Dot-product is still ap-
+ Figure 4: An example for co-designed ANN with Filtering.                   plied for efficient distance calculation inside the co-designed index.
+                                                                            Second, a scoring layers that adopts neural network modules to
+                                                                            rank these K0 user-item pairs and return as the final retrieval result.
+                                                                            By incorporating the OverArch layer, user-item interactions are
+                                                                            better learned by model weights. We found that by introducing
+in GPU memory. This provides us the opportunities to jointly opti-          the OverArch layers during inference gives us a better recall than
+mize the operators. In our Int8 ANN search operator, we support             improving the ANN search accuracy.
+passing a bit mask output from bloom index. While PyTorch native                A OverArch layer can be defined as a Multi-layer Perception
+supports Boolean as mask(8 bits per item), we use a bit mask with           (MLP), or a multiple stacked self-attention layers to capture the cor-
+one bit for each item. It can both conserves memory and enhances            relation in order to understand user’s interest, with the capability
+performance by reducing the amount of data that need to be loaded           of looking at items in an entire session. Recent study proposes more
+from GPU’s global memory. Taking the bit mask, before executing             structured interaction layer using Mixture of logits (MoL) [37] [13],
+the final step of calculating topk results, the ANN search operator         which defines similarity between user and item as adaptive com-
+applies the bloom bitmask to filter out unmatched items and then            position of elementary functions. Similar with ESR, the inputs for
+apply topk calculation. Such flexibility and co-design benefit from         OverArch layers include the item embeddings and user embed-
+SilverTorch’s model-based index design. In real use cases, a feature        ding features and other cross-features. Benefit from SilverTorch’s
+filtering query can be very complex that containing multiple logical        caching design, item embeddings and cross-features can be directly
+expression of different matches. To support this, we parse the query        extracted from GPU memory which are constructed during publish
+and pre-compute each feature’s bloom result. We store each opera-           and loaded in predictor. SilverTorch supports arbitrary OverArch
+tor(e.g, And, OR, NOT) followed by the bloom result in an operation         architectures that could improve model quality of retrieval through
+array. During serving, we go through this operation array sequen-           the full fidelity of training and serving consistency.
+tially, leveraging a stack to push temporary computation results
+and pop for logical computation between bloom results. A single
+                                                                            5.2    Multi-Task Retrieval with Value Model
+batch queries could contain hundreds of sub-queries for feature fil-
+tering in total, thus having hundreds of bloom search computation.          To learn multiple aspects of users, recommendation need to be ca-
+Additionally, the throughput of SilverTorch models was bounded by           pable of predicting multiple objectives. For example, in the context
+GPU memory. To solve these challenges, we propose feature filter-           recommendation of social media, a user has different behaviors
+ing and ANN search by proposing a partial ANN search algorithm              towards a single content, such as like, share, comment. Compared
+with bloom results, named as ANN and filtering co-designed index.           with tacking each task separately, multi-task learning aims to learn
+The co-designed index leverages the fact that only items within             multi-tasks within a single model, while exploiting commonalities
+selected clusters need to apply the feature filtering. By calculating       and differences across tasks. This way, it achieves better prediction
+bloom results for the items in selected clusters only, we can return        accuracy due to knowledge sharing. An straightforward approach
+equivalent results while significantly reducing both computation            to implement multi-task retrieval is to apply different user embed-
+and memory utilization for each request. For a case of 81 million           dings and item embeddings to represent each task and trains them
+items with 9000 clusters, each cluster has 9000 items on average.           together. However, based on the assumption that item features are
+Bloom index is applied to only 2.3 million items(2.8% of the full           learned to be the semantics representation of them so that they do
+items with 256 probes, achieving 30× saving of feature filtering            not change across tasks. An empirical multi-tasks retrieval model
+compute and reduce 30× of scratch memory during serving.                    defines that in user tower, different tasks share a lookup table and
+                                                                            it applies different dense layers for each task to generate different
+                                                                            user embeddings for different tasks. While the item embeddings
+5   EXTENSIBILITY                                                           are shared across tasks. At serving time, ANN search is built to
+By leveraging the in-model design, SilverTorch supports serving             handle multi-task user embedding queries and returns different
+more advanced recommendation models. This section explores two              item ids for different tasks. In CPU-based solutions, we need to
+major extensions built on top of canonical retrieval models. We             replicate number of tasks copies of ANN indexes to multiple servers
+also discuss how SilverTorch further scales out to multi-GPUs.              to avoid latency increase. Therefore, the cost increases linearly with
+                                                                        8
+number of tasks. In contrast, due to the parallelism nature of GPU,         cost-efficiency. We also show that SilverTorch enables more com-
+SilverTorch supports batching multiple requests from different tasks        plex model architectures in real-world applications.
+within one copy of index without latency regression. We found that          Dataset, Workloads and Models. Our experiments adopt the
+SilverTorch’s GPU approach is more cost-efficient than CPU-based            dataset generated from a subset of production. For retrieval, the
+indexing services because it can batching not only different tasks          dataset consists a candidate pool of 80 million items(referred to as
+but also different requests together for processing in parallel. Af-        80M-dataset), a candidate pool of 10 million items(referred to as
+ter returning item lists for different tasks from ANN search and            10M-dataset). For ESR, the dataset is to rank items returned from
+filtering, a merge operation is applied before the OverArch. Model          retrieval. We set the embedding dimensions in the experiments to
+designers are able to define customized merge operator such as an           128 for end-to-end experiments. We reuse the model architecture
+intersection of items or an union of items across tasks. The Over-          from production to evaluate SilverTorch without re-training. We
+Arch layer then predicts the scores for each task. To final aggregate       use A100 40G GPUs. The replayed requests are generated from
+scores across tasks, we adopt a aggregation function(named as               production traffic containing 5000 real recommendation requests.
+Value Model) that supports user-define formulates to calculate the          Experiments’ Baselines.
+final scores for each item across tasks. The value model is defined
+                                                                            • Baseline-Retrieval is a service-based retrieval for recommenda-
+as a JSON-like format that supports control flows of business logic.
+                                                                              tion. The client first sends a request to the predictor that serves
+SilverTorch implements the in-model value model kernel can parse
+                                                                              User Tower on 1 GPU and gets the user embedding. Second, the
+the input configuration format and then calculates the formulas on
+                                                                              client sends the user embedding with filtering queries to the in-
+GPUs. Instead of only applying such business logic at later ranking
+                                                                              dexing server. The indexing server provides both the ANN search
+stages, applying it earlier in retrieval stage make later stages(ESR,
+                                                                              index built based on the Faiss-CPU(IVF) and inverted-index for
+LSR) rank more accurate items. This functionality in retrieval stage
+                                                                              feature filtering and are running on CPUs. Each inverted-index
+proposes better interpretability and better consistency across the
+                                                                              CPU server builds the index on a partition of items and the
+recommendation funnel.
+                                                                              filtering queries are running in a scatter-gather manner.
+                                                                            • Baseline-Retrieval-GPU is a service-based retrieval baseline on
+5.3    Scale Out                                                              GPUs. User Tower is served on 1 GPU. The ANN search index
+To deal with even larger candidate pool and models, SilverTorch               is built based on Faiss-GPU(IVF) and the filtering index is using
+could scale out to multiple GPUs. The ANN index and the bloom                 GPU-based forward index discussed in 4.1. The ANN index and
+index are sharded across GPU cards, with each GPU processes a                 the forward index are served in multiple GPUs. Each GPU builds
+partition of items from candidate pool. The parameters of OverArch            its index on a partition of items, the ANN search and filtering
+layer and Value Model are replicated on each GPUs during publish.             are running in a scatter-gather manner. 1 means no sharding.
+During online serving, each GPU independently computes its local            • SilverTorch-Retrieval is the SilverTorch retrieval without Over-
+topk results based on local co-designed ANN search and filtering              Arch and Value Model layers. Client sends a single request to
+indexes. After that, the item embeddings are gathered into one                predictor. The server computes the user embedding followed by
+of GPU ranks to calculate the final results through the OverArch              SilverTorch’s co-designed ANN search and bloom index, return-
+layers and the Value Model. Since each GPU owns the OverArch                  ing topk item ids. For the end-to-end experiments, we shard it to
+layer and the Value Model, different batches of requests can be               2 GPUs for 80M-dataset and use a single GPU for 10M-dataset.
+randomly routed to different GPUs in parallel. This avoids one of             The predictor is running on GPUs.
+the GPU cards becoming bottleneck of the serving flow.                      • SilverTorch-Retrieval-OverArch is SilverTorch retrieval with Over-
+   Since GPUs are expensive, the major factor to decide how many              Arch scoring layer and the in-model Value Model. After initial
+GPUs needed for serving is the memory. The memory size depends                ANN search and filtering, the merged item ids are re-ranked in
+on multiple factors including the candidate pool size, the ANN                the OverArch layer. Each item’s score is further aggregated with
+index and the bloom index size and the size of the OverArch model             a value model and the final selected topk item ids are returned.
+weights. As the candidate pool size increases, the bloom index sizes          This is the multi-task setup. The predictor is running on GPUs.
+grow as well as the ANN index size. ANN index size also relies on           • ESR Baselines. The baseline system is to compute item embed-
+the quantization precision and the embedding dimensions of each               dings during inference. We enable this inside SilverTorch. SilverTorch-
+model. SilverTorch’s quantized Int8 ANN index and the bloom index             ESR is to pre-computes item embeddings and populates them on
+designs already saves a large amount of GPU memory. Finally, the              GPU memory during publish. During inference, given a item id,
+complexity of OverArch layers determines the number of items a                item embeddings are directly looked up from embedding cache.
+GPU could serve because consuming more GPU memory can hit the               • ANN and Filtering Baselines. We compare SilverTorch’s ANN with
+resource boundary of GPU. In our real deployment, there are cases             Faiss-CPU(IVF), Faiss-GPU(IVF) and HNSW. We compare Bloom
+that a single GPU could serve around 100 million items, as well as            Index with the GPU-based forward index and the CPU-based
+multiple GPUs serving billions items. For the user embedding table,           inverted index.
+we scale out to CPU parameter servers for distributed inference.
+                                                                            Metrics For end-to-end experiments, we measure latency and
+                                                                            Query per Second(QPS) from client side. The client concurrently
+6     EVALUATION                                                            sends requests to predictor and indexing servers. For each test,
+We focus on evaluating the performance of SilverTorch. We demon-            we gradually increase sending QPS in client side to avoid server-
+strate that SilverTorch offers performance improvement with better          side overload and report the maximum throughput number it can
+                                                                        9
+reach. For latency, we test under multiple throughput settings. High-                       Table 2: Cost-efficiency Breakdowns
+throughput tests may increase latency and we want report different
+latency given different sending QPS. Each experiment is running 5                       Baselines             QPS    TCO/Hour   TCO/1000 Requests   Cost Efficiency
+times and we report the average number. To evaluate the benefits of                    Baseline-CPU            51     $28.92         $0.158                1
+                                                                              Baseline-GPU(Faiss2-Forward4)    186    $30.29         $0.0452             3.48×
+SilverTorch’s OverArch and in-model Value Model components, we                Baseline-GPU(Faiss2-Forward6)    340    $33.27         $0.0272             5.8×
+measure recalls at different scales, together with QPS and average                      SilverTorch           1210    $33.27         $0.0077             20.9×
+latency. We evaluate different metrics for breakdown analysis.                    SilverTorch-OverArch         771    $33.27         $0.012             13.35×
+
+
+
+
+6.1    End-to-end Evaluation                                                 of items each CPU or GPU handles is close. As shown from 5(c),
+6.1.1 Retrieval. We build a state-of-the-art service-based retrieval         for 80M-dataset, we also test average latency with different probes
+solution as the baseline. Instead of modifying model architecture            under different sending QPS. Lower sending QPS simulates the non-
+and retrain the model, we reuse the model structure under produc-            busy traffic while higher sending QPS simulates the busy traffic.
+tion setup. The model is a multi-task retrieval model containing             SilverTorch’s average latency keep around 14ms while Baseline-
+12 different embedding heads for each user. Each request retrieves           Retrieval and the GPU baseline increases as sending QPS increases.
+12-way topk items from ANN search. For feature filtering, the query          The reason is in high QPS cases, the latency is bounded by compute
+includes the combination of AND queries and OR queries and NOT               both for CPU baseline and GPU baseline. For SilverTorch, compute
+queries, the total number of features are 6 and the average num-             resource is not saturated so latency keeps low. The QPS decreases
+ber of conditions is 7. For the service-based baseline, we use Faiss         because it hits the memory limit due to scratch memory alloca-
+library to build ANN index and use an internal inverted index                tion during runtime to process more requests. In contrast, although
+implementation for filtering which was used in production. The               Baseline-Retrieval-GPU also uses GPUs but it saturates the compute
+Faiss-CPU index and the inverted index are sharded on the partition          more quickly even with smaller probes. During the experiments,
+of items for 80M-dataset. For the 80M-dataset, we shard Faiss-based          we observe that when probe is small, the GPU baseline’s perfor-
+ANN index into 2 CPU servers and shard the inverted index into 4             mance is bounded by the compute of forward index. When probe
+servers. This is the minimal sharing because smaller settings are too        is larger than 128, GPU baseline’s performance is bounded by the
+slow. The shading logic is horizontally partitioning the items and           compute of Faiss ANN search. Under the setting of 24 probes and
+build the index independently, when the indexing server received             10 sending QPS, SilverTorch’s latency is 14ms, which are 11.4×
+a recommendation request, it fans out to different shards to get             improvement over the CPU baseline and 1.64× improvement over
+results, the results are finally merged in aggregator CPU server and         the best GPU baselines. For higher throughput cases, SilverTorch
+returned to client. For the 10M-dataset, the data are not shared.            gets 127× and 13.85× improvements over CPU and GPU baselines
+    Figure 5(a) and 5(b) show the end-to-end performance vary-               respectively. We also test the performance across different topk,
+ing the number of ANN probes. We fix the topk to 1024. For the               we found the QPS of SilverTorch-Retrieval only decreases from
+baseline, we set the openMP threads used for Faiss-CPU to be 64.             1816 to 1531 when varying topk from 128 to 20,000. For the GPU
+For the GPU baselines, we test with different settings of shards.            baseline, Faiss-GPU can only support topk > 2048 so we can not test
+Baseline-Retrieval-GPU-FaissX-ForwardY means the ANN index                   it. SilverTorch supports larger topk for recommendation models
+with X shards and the forward index with Y shards. For 80M-dataset,          without too much performance regression. In our deployment, we
+it takes 40GB memory so we use two shards for Faiss-GPU. As we               get 10,000 to 100,000 items and feed into OverArch scoring layers.
+can see from Figure 5(a), as the number of probes decreases, the QPS         6.1.2 Early-stage Ranking. We test SilverTorch’s ESR performance
+of SilverTorch increases from 90 to 2336 while the QPS of Baseline-          to evaluate how much improvement embedding cache provides.
+Retrieval increases from 17 to 270, Baseline-Retrieval-GPU-Faiss2-           Each request input for the ESR is user embedding and a list of item
+Forward4 and Baseline-Retrieval-GPU-Faiss2-Forward6 increase                 ids. We vary the number of items for ranking from 286 to 1,464,320.
+from 43 to 193, from 60 to 361, respectively. Under 24 probes(production     As shown from Figure 5(d), SilverTorch could rank more items
+setting), SilverTorch has 1210 QPS, achieving 23.7× improvement              comparing to the baseline. The baseline fails with more than 5720
+over Baseline-Retrieval, 3.5× improvement over Baseline-Retrieval-           items due to timeout while SilverTorch could rank up to 183,040
+GPU-Faiss2-Forward4 and 6.7× improvement over Baseline-Retrieval-            items. At the scale of 1000 items, SilverTorch achieves 4998 QPS
+GPU-Faiss2-Forward6. Although GPU baselines perform better as                comparing to baseline’s 491, 10.18× higher.
+shard increases, the cost increases linearly. Since our serve has 8
+GPU cards, with 2 GPUs are used for Faiss index, we test up to 6             6.1.3 Server-side Batching. As we discussed, the throughput of
+shards of the forward index. For the 10M-dataset, we do not shard            SilverTorch-Retrieval is bounded by the memory instead of com-
+the data. As we can see from Figure 5(b), under the 24 probes, the           pute. In this case, we can enable server-side batching to further
+QPS of SilverTorch-Retrieval is 3802, 165.3× higher than the CPU             utilize the GPU resources. For the retrieval experiments, we fix the
+baseline and 20.8× higher than the GPU baseline. Under this exper-           topk=1024 and probe=24 and increase the batch size, the predictor
+iment, we want to simulate smaller-scale recommendation serving              waits until it gets enough batch size requests to do further process-
+use case so we do not shard data for baselines to differentiate with         ing. We found that the initial QPS can be improved from 1295 to
+80M setting. Therefore, we get even larger speedups. The QPS of              1746 with 6 batch sizes. With larger batch size, the QPS decreases
+SilverTorch increases 3.1× reducing the pool size from 40M to 10M            since the predictor spends more time waiting for coming requests to
+while the QPS of baselines keep in the same scale since the number           batch. Similarly, in Figure 5(d), SilverTorch-ESR-Batching archives
+                                                                        10
+                                  Figure 5: End-to-end performance Results for Retrieval and ESR.
+
+
+1.58× QPS improvement when enabling batching on average. In                 per hour are $15.47 + $2.47 ∗ (2 + 4) = $30.29 and 32.77 respec-
+this experiment, we set the timeout to be 10ms to wait for batching.        tively. The SilverTorch-Retrieval is using one GPU server of two
+                                                                            A100 40G cards, contributing two the total TCO per hour is up
+                                                                            to $32.77. To serve the same amount of queries, considering the
+                                                                            QPS of Baseline-Retrieval, two GPU baselines are 51, 184 and 340
+6.2    Cost Efficiency Analysis                                             respectively, while the QPS of SilverTorch-Retrieval is 1210. Table
+To illustrate cost efficiency of SilverTorch’s GPU solution, we es-         2 shows breakdown TCO for serving a traffic with QPS of 1000.
+timate reduction of Total Cost of Ownership(TCO) using the QPS              SilverTorch achieves 1210    28.92
+                                                                                                   340 ∗ 33.27 = 20.9× cost-efficiency speedups
+results from 80M-dataset experiments. For the CPU server we use             comparing to CPU-based baseline and 3.56× speedups comparing
+the machine with 256GB memory and 40 Cores. For the GPU server,             to the best GPU-based baseline. Furthermore, considering the recall
+we use the machine with 48 CPU Cores and 384GB Memory with                  wins brings from SilverTorch’s OverArch and value mode, the QPS
+different numbers of A100 40GB cards. We find the similar instance          decreases to 771, which still has 13.35× improvement than CPU-
+types in AWS to estimate TCO. AWS does not have EC2 instance                based solution and 2.27× improvement than GPU-based solution.
+with identical configuration, therefore we find close instance types
+to estimate the lower bound. Specifically, we estimate TCO of our           6.3    Breakdown Analysis
+CPU server using r6i.8xlarge(32 vCPUs, 256GB Memory) in the
+                                                                            In this section, we evaluate the performance of each component in
+region of US West, the rate is around $2.24/hour [5] for on-demand
+                                                                            SilverTorch. We focus on a single GPU experiments.
+plan. For GPU servers, AWS only offers A100 40GB exclusively in
+p4d.24xlarge instances, each consisting of 8 GPU cards, 96 vCPUs            6.3.1 Evaluation on ANN Search. We compare SilverTorch’s fused
+and 1.15 TB Memory at the rate of $32.7726/hour [4] for on-demand           ANN search both CPU and GPU baselines. Faiss supports different
+plan. We use this number to estimate the TCO per hour for Silver-           types of vector index structures. We evaluate the most efficient
+Torch and GPU baseline. Meanwhile, to project to the cost with a            IVFFlat index with float32, both on CPU and GPU. We also com-
+single A100 40G GPU card for baseline’s user tower, we find similar         pare with HNSW implemented in Faiss. For Cargo-GPU, it limits
+CPU configuration of the GPU server, which is x2idn.24xlarge [6]            the topk to 1024 and can not be used in recommendation scenario
+and its rate is $13.005/hour. Therefore, a single A100 40G GPU’s            as we discussed. Since HNSW is graph-based algorithm it has no
+TCO per hour can be estimated as ($32.7726−$13.005)
+                                              8         = $2.47. We         parameter of probes. Therefore, we compare the average latency to
+estimate the TCO per hour for baseline’s user tower to be $13.005 +         achieve same recall for different methods. The dataset is 20 million
+$2.47 = $15.47. We use the previous QPS results to evaluate the cost        item embeddings with 128 dimensions. The query embeddings are
+efficiency. The Baseline-Retrieval uses one GPU to serve user tower         generated from the User Tower. While end-to-end settings run on
+and uses 2 CPU servers to serve ANN search and 4 CPU servers to             multiple CPUs and GPUs, we focus on evaluating the performance
+serve filtering. Therefore, the TCO of Baseline-Retrieval per hour          on a single server and a single GPU. We run 50 batches for warm-up
+is $15.47 + $2.24 ∗ (2 + 4) = $28.92. The TCO of Baseline-Retrieval-        and report the average latency of following 100 batches. While our
+GU-Faiss2-Forward4 and Baseline-Retrieval-GU-Faiss2-Forward6                real use case uses topk > 10,000, here we test topk with 2048 and
+                                                                       11
+                                       Figure 6: Latency/Recall results of different ANN methods.
+
+
+4096 since Faiss-GPU can only support topk up-to 2048. Figure 6                 6.3.2 Evaluation on Bloom Index. We compare the performance of
+ shows the average latency given different recalls under batch size =           bloom index with inverted index on CPU and forward index on GPU.
+16. As we can see, SilverTorch-INT8 is fastest in both cases. Under             We use our internal implementation of inverted index, which is
+ the setting of topk=2048, Comparing to Faiss-GPU, we achieve 2.2×              used in production for years. In this section, we focus on evaluating
+- 14.73.1× lower latency varying recall from 0.35 to 0.92. For recall           performance on a single CPU and GPU server. The index is built
+ 0.95, due to the quantization of SilverTorch-INT8, we can not get this         on a dataset of 40 million items. We use filtering queries from 5,000
+ recall. As we discussed, the saved latency from SilverTorch’s ANN              real requests. Each item contains 6 features, and 10 feature values
+ search can fund OverArch model computation. Meanwhile, at recall               on average. For bloom index, we use 5 hash functions and compare
+ 0.95, Faiss-CPU uses probes 1024 and Faiss-GPU uses probes 512. In             average latency with inverted index and forward index at different
+ practice, 512 is too large since the performance decreases dramati-            batch sizes and bit sizes. We also report false positive rate at various
+ cally of Faiss when probes increases. We also study the recall under           numbers of bits. NOT queries are filtered out from query set, as
+ different probes comparing to Faiss. Under the setting of topk=4096,           they can mislead the false positive rate. Figure 10 (a) shows the
+ Faiss-GPU can not support it and SilverTorch-INT8 achieves 31.3×               average latency per batch at different batch sizes. The bloom index
+- 51× lower latency comparing to HNSW and achieves 4.6× - 49.2×                 supports batching more effectively, achieving a latency speedup of
+ lower latency comparing to Faiss-CPU. We also found that tuning                291 to 523 times compared to inverted index, and between 12.6 and
+ cluster-based ANN is much easier since we only need to increase                42.7 times compared to forward index. The bloom index lookup
+ probes instead 3 interdependent parameters in HNSW.                            latency remains constant regardless of bit size (e.g., 512 to 1024 bits),
+    Furthermore, we compare SilverTorch fused ANN search on GPU                 since the query path involves a fixed number of hash functions
+with Faiss IVFFlat (GPU and CPU) and Faiss HNSW using the public                and bitwise memory accesses, which are highly parallelizable and
+ deep-image-96-inner 10M dataset. Since this dataset (10M) is smaller           efficiently handled by GPU’s warp-level execution. For inverted
+ than the internal dataset (20M), our results show that smaller probe           index, latency for different queries varies significantly, depending
+ counts can achieve comparable recall for both SilverTorch ANN and              on the length of posting lists of the query. Figure 10 (b) shows
+ Faiss IVFFlat. As a result, these algorithms outperform HNSW when              false positive rate for different bits in bloom index. Using 512 bits
+ evaluated at the same recall rate. Figure 7 demonstrates that the              for each item results in total 1.2 GB memory, with a false positive
+ latency trends are consistent with those observed on the internal              rate of 6.98%. As the number of bits increases to 1024, the false
+ dataset: SilverTorch maintains stable latency around 0.9–1.05 ms.              positive rate drops to 0.067%. The 512-bit, 768-bit, 1024-bit, and
+ Compared to Faiss IVFFlat GPU, SilverTorch achieves 1.57x to 6.25x             2048-bit bloom indexes require 1.2 GB, 1.8 GB, 2.4 GB, and 4.7 GB
+ lower latency as recall varies from 0.5 to 0.98. Figure 8 illustrates          memory respectively. In contrast, inverted index requires 19.8 GB
+ latency trends across different batch sizes. SilverTorch delivers 2.35x        memory, 4.21× larger than bloom index of 2048 bits. To maintain
+ to 2.8x lower latency than Faiss IVFFlat GPU as batch size increases           an acceptable false positive rate, an heuristic estimation for the
+ from 1 to 32. Figure 9 presents recall trends as the number of probes          number of bits can be #max_feature_value × #hash_function ×
+ increases for SilverTorch and Faiss IVF. For most probe counts,                hash_collision_buffer. For example, in our query set, the maximum
+ SilverTorch achieves recall@2048 similar to Faiss. However, due to             feature value for an item is 120, the number of hash functions is 5,
+ INT8 quantization, SilverTorch’s recall on this dataset plateaus at            and the buffer is 3, resulting in 1800 bits per item.
+ 0.98.
+                                                                                6.3.3 Evaluation on ANN and filtering co-designed Index. To eval-
+                                                                                uate the improvement of co-designed index design, we use the 20
+                                                                           12
+                                               Figure 7: Latency/recall on open dataset.
+
+      Task     Method                   Recall@20         Recall@100           Recall@200        Recall@500        Recall@1000       QPS
+               Baseline                    0.08239            0.19179             0.29131           0.4295            0.44127         51
+      E-Task   SilverTorch                 0.07163            0.20306             0.28923           0.4237            0.44651        1210
+               SilverTorch-OverArch   0.09181 (+28.2%)   0.24189 (+19.1%)    0.33148 (+14.6%)   0.44758 (+5.6%)   0.45727 (+2.4%)     771
+               Baseline                    0.09642           0.25217              0.3551            0.4971             0.5162         51
+      C-Task   SilverTorch                 0.09652           0.25291               0.352            0.4969             0.51973       1210
+               SilverTorch-OverArch    0.0971 (+0.6%)    0.25733 (+1.7%)      0.36011 (+2.3%)   0.50747 (+2.2%)   0.52559 (+1.12%)    771
+                                        Table 3: Recall evaluations on a E-Task and a C-Task
+
+
+
+
+        Figure 8: Latency/batch size on open dataset.                                 Figure 9: Recall/Probes on open dataset.
+
+
+millions dataset with 128 embedding dimension. We compare with              for ANN and 18.2MB for bloom index search). The ANN and filter-
+the baseline that conduct Bloom index and passing the mask results          ing co-designed index optimization reduces the temporary memory
+to the ANN. Figure 11 shows the GPU memory utilization and la-              needed for bloom index to 0.14MB so memory needed is 18.2MB for
+tency under number of probes. Take probe=32 as example, without             the ANN search and filtering. Meanwhile, corresponding latency
+co-design, the scratch memory needed at runtime is 35.6MB(17.4MB            reduces from 1.55ms to 0.72ms. On average, the latency of executing
+                                                                     13
+                                                  Figure 10: Performance of Bloom Index.
+
+
+                                                                               QPS speedups and 5.6× lower latency than service-based recom-
+                                                                               mendation solutions. We report this number as the summarized
+                                                                               improvement. SilverTorch empowers recommendation for our ma-
+                                                                               jor products and is the foundation of key innovations such as the
+                                                                               HSTU model[38], reaching billions of daily active users.
+
+                                                                               7    DISCUSSION AND FUTURE WORK
+                                                                               SilverTorch is originally designed for large-scale recommendation
+                                                                               with more than tens to hundreds of million items. However, Silver-
+                                                                               Torch provides benefits of unified development and serving. Instead
+                                                                               of maintaining different services on multiple CPU servers, users
+                                                                               can use single GPU server to support thousand QPS. If the traffic
+                                                                               is smaller, the headroom can be considered for potential business
+Figure 11: Latency and memory utilization comparison be-                       grow. For extreme smaller scale case, users can switch to the CPU
+tween co-designed ANN+Bloom and original ANN+Bloom.                            kernel with a configuration change.
+
+                                                                               8    CONCLUSION
+                                                                               We present SilverTorch, a unified model-based system for serving
+ANN and filtering improves from 1.79× to 2.15×. As we discussed,               large-scale recommendation on GPUs. SilverTorch democratizes
+for the memory-bound case, the memory saving can fund more                     recommendation model development using PyTorch, simplifying
+requests batching and support higher QPS.                                      client-side logic and eliminating dependencies on standalone ser-
+                                                                               vices. SilverTorch proposes a fused Int8 ANN index and introduces
+6.3.4 Evaluation on OverArch Scoring and Value Model. To eval-                 a bloom index feature filtering as model layers. We further propose
+uate the benefits of OverArch and the value model, we compare                  a co-designing bloom index and ANN search algorithm. Silver-
+the recalls at different sizes. The ground truth is generated from             Torch extends existing retrieval model by introducing OverArch
+user-item interaction behaviors. We set the number of probes to                and in-model value model, enhancing recall while keeps latency low.
+32. We report recalls of a major engagement event ("E-Task") and               SilverTorch employs embedding cache to avoid calculating item
+a major consumption event ("C-Task") based on the evaluation                   embedding for ranking. Our experiments demonstrate SilverTorch
+dataset respectively. We implement the structure of Mixture of                 can serve million items and scale to multiple GPUs. Compared to
+Logits(MoL) [13] as the OverArch. For the value model, we apply                state-of-the-art systems, SilverTorch achieves 5.6× lower latency,
+multiple pre-defined rules, which are validated from online A/B                23.7× throughput improvement and is 13.35× more cost-efficient.
+testing and business logic. As we can see from Table 3, by adding              We believe that SilverTorch represents an important step toward
+scoring layers on top of retrieval models, the E-Task recall at differ-        GPU-based serving for future recommendation models.
+ent sizes increase from 2.4% to 28.2%. Similarly, the C-Task recalls at
+different sizes also increase from 0.6% to 1.12%. With such accuracy           REFERENCES
+improvements, SilverTorch’s QPS reduces from 1210 to 771 and                    [1] Martín Abadi, Paul Barham, Jianmin Chen, Zhifeng Chen, Andy Davis, Jeffrey
+latency reduces from 14ms to 28ms, but it stills achieves 15.11×                    Dean, Matthieu Devin, Sanjay Ghemawat, Geoffrey Irving, Michael Isard, et al.
+                                                                          14
+     { TensorFlow } : a system for { Large-Scale } machine learning. In 12th USENIX                   Software-hardware co-design for fast and scalable training of deep learning
+     symposium on operating systems design and implementation (OSDI 16), pages                        recommendation models. In Proceedings of the 49th Annual International Sympo-
+     265–283, 2016.                                                                                   sium on Computer Architecture, pages 993–1011, 2022.
+ [2] Newsha Ardalani, Carole-Jean Wu, Zeliang Chen, Bhargav Bhushanam, and                       [27] Maxim Naumov, Dheevatsa Mudigere, Hao-Jun Michael Shi, Jianyu Huang,
+     Adnan Aziz. Understanding scaling laws for recommendation models. arXiv                          Narayanan Sundaraman, Jongsoo Park, Xiaodong Wang, Udit Gupta, Carole-
+     preprint arXiv:2208.08489, 2022.                                                                 Jean Wu, Alisson G Azzolini, et al. Deep learning recommendation model for
+ [3] David Arthur and Sergei Vassilvitskii. k-means++: The advantages of careful                      personalization and recommendation systems. arXiv preprint arXiv:1906.00091,
+     seeding. Technical report, Stanford, 2006.                                                       2019.
+ [4] aws. Aws p4d.24xlarge instance cost. https://instances.vantage.sh/aws/ec2/p4d.              [28] Even Oldridge, Julio Perez, Ben Frederickson, Nicolas Koumchatzky, Minseok
+     24xlarge?region=us-west-2, 2023.                                                                 Lee, Zehuan Wang, Lei Wu, Fan Yu, Rick Zamora, Onur Yilmaz, et al. Merlin: a
+ [5] aws. Aws r6i.8xlarge instance cost. https://instances.vantage.sh/aws/ec2/r6i.                    gpu accelerated recommendation framework. In Proceedings of IRS, 2020.
+     8xlarge?region=us-west-1, 2023.                                                             [29] Weston Pace, Chang She, Lei Xu, Will Jones, Albert Lockett, Jun Wang, and
+ [6] aws. Aws x2idn.24xlarge instance cost. https://instances.vantage.sh/aws/ec2/                     Raunak Shah. Lance: Efficient random access in columnar storage through
+     x2idn.24xlarge?region=us-west-1, 2023.                                                           adaptive structural encodings. arXiv preprint arXiv:2504.15247, 2025.
+ [7] Paul Baltescu, Haoyu Chen, Nikil Pancha, Andrew Zhai, Jure Leskovec, and                    [30] A Paszke. Pytorch: An imperative style, high-performance deep learning library.
+     Charles Rosenberg. Itemsage: Learning product embeddings for shopping rec-                       arXiv preprint arXiv:1912.01703, 2019.
+     ommendations at pinterest. In Proceedings of the 28th ACM SIGKDD Conference                 [31] Pinterest. Manas hnsw realtime: Powering realtime embedding-based re-
+     on Knowledge Discovery and Data Mining, pages 2703–2711, 2022.                                   trieval.     https://medium.com/pinterest-engineering/manas-hnsw-realtime-
+ [8] Fedor Borisyuk, Qingquan Song, Mingzhou Zhou, Ganesh Parameswaran, Madhu                         powering-realtime-embedding-based-retrieval-dc71dfd6afdd, 2023.
+     Arun, Siva Popuri, Tugrul Bingol, Zhuotao Pei, Kuang-Hsuan Lee, Lu Zheng,                   [32] Rapidsai. Rapidsai/raft: Raft contains fundamental widely-used algorithms and
+     et al. Linr: Model based neural retrieval on gpus at linkedin. In Proceedings of the             primitives for data science, graph and machine learning., 2022. URL https:
+     33rd ACM International Conference on Information and Knowledge Management,                       //github.com/rapidsai/raft.
+     pages 4366–4373, 2024.                                                                      [33] Jianguo Wang, Xiaomeng Yi, Rentong Guo, Hai Jin, Peng Xu, Shengjun Li, Xi-
+ [9] Sergey Brin and Lawrence Page. The anatomy of a large-scale hypertextual web                     angyu Wang, Xiangzhou Guo, Chengming Li, Xiaohai Xu, et al. Milvus: A
+     search engine. Computer networks and ISDN systems, 30(1-7):107–117, 1998.                        purpose-built vector data management system. In Proceedings of the 2021 Inter-
+[10] B Barla Cambazoglu and Ricardo Baeza-Yates. Scalability and efficiency chal-                     national Conference on Management of Data, pages 2614–2627, 2021.
+     lenges in large-scale web search engines. In Proceedings of the 39th International          [34] Jizhe Wang, Pipei Huang, Huan Zhao, Zhibo Zhang, Binqiang Zhao, and Dik Lun
+     ACM SIGIR conference on Research and Development in Information Retrieval,                       Lee. Billion-scale commodity embedding for e-commerce recommendation in
+     pages 1223–1226, 2016.                                                                           alibaba. In Proceedings of the 24th ACM SIGKDD international conference on
+[11] Qi Chen, Bing Zhao, Haidong Wang, Mingqin Li, Chuanjie Liu, Zengzhong Li,                        knowledge discovery & data mining, pages 839–848, 2018.
+     Mao Yang, and Jingdong Wang. Spann: Highly-efficient billion-scale approximate              [35] Xinyang Yi, Ji Yang, Lichan Hong, Derek Zhiyuan Cheng, Lukasz Heldt, Aditee
+     nearest neighborhood search. Advances in Neural Information Processing Systems,                  Kumthekar, Zhe Zhao, Li Wei, and Ed Chi. Sampling-bias-corrected neural
+     34:5199–5212, 2021.                                                                              modeling for large corpus item recommendations. In Proceedings of the 13th
+[12] Paul Covington, Jay Adams, and Emre Sargin. Deep neural networks for youtube                     ACM conference on recommender systems, pages 269–277, 2019.
+     recommendations. In Proceedings of the 10th ACM conference on recommender                   [36] Andrew Zhai, Hao-Yu Wu, Eric Tzeng, Dong Huk Park, and Charles Rosenberg.
+     systems, pages 191–198, 2016.                                                                    Learning a unified embedding for visual search at pinterest. In Proceedings of
+[13] Bailu Ding and Jiaqi Zhai. Retrieval with learned similarities. In Proceedings of                the 25th ACM SIGKDD international conference on knowledge discovery & data
+     the ACM on Web Conference 2025, pages 1626–1637, 2025.                                           mining, pages 2412–2420, 2019.
+[14] Matthijs Douze, Alexandr Guzhva, Chengqi Deng, Jeff Johnson, Gergely Szilvasy,              [37] Jiaqi Zhai, Zhaojie Gong, Yueming Wang, Xiao Sun, Zheng Yan, Fu Li, and Xing
+     Pierre-Emmanuel Mazaré, Maria Lomeli, Lucas Hosseini, and Hervé Jégou. The                       Liu. Revisiting neural retrieval on accelerators. In Proceedings of the 29th ACM
+     faiss library. 2024.                                                                             SIGKDD Conference on Knowledge Discovery and Data Mining, pages 5520–5531,
+[15] Roy Frostig, Matthew James Johnson, and Chris Leary. Compiling machine                           2023.
+     learning programs via high-level tracing. In SysML conference 2018, 2019.                   [38] Jiaqi Zhai, Lucy Liao, Xing Liu, Yueming Wang, Rui Li, Xuan Cao, Leon Gao, Zhao-
+[16] github. Faiss on the gpu limitations. https://github.com/facebookresearch/faiss/                 jie Gong, Fangda Gu, Michael He, et al. Actions speak louder than words: Trillion-
+     wiki/Faiss-on-the-GPU#limitations, 2023.                                                         parameter sequential transducers for generative recommendations. arXiv preprint
+[17] Bob Goodwin, Michael Hopcroft, Dan Luu, Alex Clemmer, Mihaela Curmei,                            arXiv:2402.17152, 2024.
+     Sameh Elnikety, and Yuxiong He. Bitfunnel: Revisiting signatures for search.                [39] Buyun Zhang, Liang Luo, Yuxin Chen, Jade Nie, Xi Liu, Daifeng Guo, Yanli Zhao,
+     In Proceedings of the 40th International ACM SIGIR Conference on Research and                    Shen Li, Yuchen Hao, Yantao Yao, et al. Wukong: Towards a scaling law for
+     Development in Information Retrieval, pages 605–614, 2017.                                       large-scale recommendation. arXiv preprint arXiv:2403.02545, 2024.
+[18] Jui-Ting Huang, Ashish Sharma, Shuying Sun, Li Xia, David Zhang, Philip Pronin,             [40] Xiangyu Zhao, Maolin Wang, Xinjian Zhao, Jiansheng Li, Shucheng Zhou, Dawei
+     Janani Padmanabhan, Giuseppe Ottaviano, and Linjun Yang. Embedding-based                         Yin, Qing Li, Jiliang Tang, and Ruocheng Guo. Embedding in recommender
+     retrieval in facebook search. In Proceedings of the 26th ACM SIGKDD International                systems: A survey. arXiv preprint arXiv:2310.18608, 2023.
+     Conference on Knowledge Discovery & Data Mining, pages 2553–2561, 2020.
+[19] Dmytro Ivchenko, Dennis Van Der Staay, Colin Taylor, Xing Liu, Will Feng,
+     Rahul Kindi, Anirudh Sudarshan, and Shahin Sefati. Torchrec: a pytorch domain
+     library for recommendation systems. In Proceedings of the 16th ACM Conference
+     on Recommender Systems, pages 482–483, 2022.
+[20] Suhas Jayaram Subramanya, Fnu Devvrit, Harsha Vardhan Simhadri, Ravishankar
+     Krishnawamy, and Rohan Kadekodi. Diskann: Fast accurate billion-point nearest
+     neighbor search on a single node. Advances in neural information processing
+     Systems, 32, 2019.
+[21] Jeff Johnson, Matthijs Douze, and Hervé Jégou. Billion-scale similarity search
+     with GPUs. IEEE Transactions on Big Data, 7(3):535–547, 2019.
+[22] Patrick Lewis, Ethan Perez, Aleksandra Piktus, Fabio Petroni, Vladimir
+     Karpukhin, Naman Goyal, Heinrich Küttler, Mike Lewis, Wen-tau Yih, Tim
+     Rocktäschel, et al. Retrieval-augmented generation for knowledge-intensive nlp
+     tasks. Advances in neural information processing systems, 33:9459–9474, 2020.
+[23] Yu A Malkov and Dmitry A Yashunin. Efficient and robust approximate nearest
+     neighbor search using hierarchical navigable small world graphs. IEEE transac-
+     tions on pattern analysis and machine intelligence, 42(4):824–836, 2018.
+[24] Milvus. Milvus gpu limitations. https://milvus.io/docs/gpu_index.md, 2023.
+[25] Philipp Moritz, Robert Nishihara, Stephanie Wang, Alexey Tumanov, Richard
+     Liaw, Eric Liang, Melih Elibol, Zongheng Yang, William Paul, Michael I Jordan,
+     et al. Ray: A distributed framework for emerging { AI } applications. In 13th
+     USENIX symposium on operating systems design and implementation (OSDI 18),
+     pages 561–577, 2018.
+[26] Dheevatsa Mudigere, Yuchen Hao, Jianyu Huang, Zhihao Jia, Andrew Tulloch,
+     Srinivas Sridharan, Xing Liu, Mustafa Ozdal, Jade Nie, Jongsoo Park, et al.
+                                                                                            15
+
